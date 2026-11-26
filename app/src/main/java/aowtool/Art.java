@@ -167,6 +167,28 @@ public class Art {
         return r;
     }
 
+
+    /** Art of a building / unit "kind" (the id the game uses directly for placed buildings; 0..14 = buildings). */
+    public Img kindImage(int kind) {
+        if (kind < 0 || kind >= KINDS || kind >= gA[14].length) return null;
+        Integer key = Integer.valueOf(100000 + kind);
+        if (objCache.containsKey(key)) return objCache.get(key);
+        Canvas c = new Canvas(256, 192, 64, 64);
+        try { kind(c, kind, 0, 0); } catch (IOException e) { /* keep partial */ }
+        Img r = c.crop(false);
+        objCache.put(key, r);
+        return r;
+    }
+
+    /** Footprint {w,h} in cells of a building / unit kind. */
+    public int[] kindFootprint(int kind) {
+        if (kind < 0 || kind >= gz[18].length) return new int[]{1, 1};
+        return new int[]{Math.max(1, gz[18][kind] & 255), Math.max(1, gz[19][kind] & 255)};
+    }
+
+    /** Number of kinds the game defines. */
+    public int kindCount() { return Math.min(KINDS, gz[18].length); }
+
     private int kindOf(int ts, int type) {
         if (ts < 0 || ts >= gC.length || type < 0) return -1;
         int idx = gD[ts][14] + type;
