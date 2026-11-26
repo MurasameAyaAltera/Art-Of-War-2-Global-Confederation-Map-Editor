@@ -85,6 +85,58 @@ public class RandomGenTest {
         check(Arrays.equals(r.tiles, m.tiles) && r.objects.size() == m.objects.size()
                 && r.buildings.size() == m.buildings.size(), tag + " reparse");
         check(r.script().size() == orig.script().size(), tag + " script changed");
+        verifyGap(orig, m, o, tag);
+    }
+
+    /** Cells of a side: all cells of its buildings (no walls) and its scripted unit spawns. */
+    static List<int[]> sideCells(AowMap m, int side) {
+        List<int[]> out = new ArrayList<int[]>();
+        for (int[] b : m.buildings) {
+            if (AowMap.isWall(b[0]) || AowMap.owner(b[0]) != side) continue;
+            int[] f = AowMap.footprint(b[0]);
+            for (int y = b[2]; y < b[2] + f[1]; y++) for (int x = b[1]; x < b[1] + f[0]; x++) out.add(new int[]{x, y});
+        }
+        for (int[] e : m.script()) if (e[0] == 27 && (e[5] >= 3) == (side == 0)) out.add(new int[]{e[1], e[2]});
+        return out;
+    }
+
+    static double gapTo(List<int[]> cells, int x, int y, int w, int h) {
+        double best = 1e9;
+        for (int[] c : cells) for (int yy = y; yy < y + h; yy++) for (int xx = x; xx < x + w; xx++)
+            best = Math.min(best, Math.sqrt((c[0] - xx) * (c[0] - xx) + (c[1] - yy) * (c[1] - yy)));
+        return best;
+    }
+
+    static int gapRuns = 0, gapRelaxed = 0;
+
+    /** New buildings and rally points must keep o.usedGap cells from the other side; usedGap >= min(safeGap, floor). */
+    static void verifyGap(AowMap orig, AowMap m, RandomGen.Options o, String tag) {
+        if (o.safeGap <= 0 || (!o.buildings && !o.paths)) return;
+        if (o.usedGap < 0) return;            // nothing was placed under the limit (e.g. groups without factories)
+        gapRuns++;
+        if (o.usedGap < o.safeGap) gapRelaxed++;
+        check(o.usedGap >= Math.min(o.safeGap, RandomGen.MIN_SAFE_GAP), tag + " usedGap " + o.usedGap + " below the floor");
+        check(o.usedGap <= o.safeGap, tag + " usedGap " + o.usedGap + " above the request");
+        if (o.buildings) {
+            List<int[]> other = sideCells(m, 1 - o.side);
+            if (!other.isEmpty()) for (int[] b : m.buildings) {
+                if (AowMap.isWall(b[0]) || AowMap.owner(b[0]) != o.side || contains(orig.buildings, b)) continue;
+                int[] f = AowMap.footprint(b[0]);
+                double g = gapTo(other, b[1], b[2], f[0], f[1]);
+                check(g >= o.usedGap - 1e-9, tag + " building " + Arrays.toString(b) + " only " + g + " from the other side");
+            }
+        }
+        if (o.paths) {
+            List<int[]> player = sideCells(m, 0);
+            for (int g = 0; g < 3; g++) {
+                List<int[]> now = m.attackPath(g), was = orig.attackPath(g);
+                boolean same = now.size() == was.size();
+                for (int i = 0; same && i < now.size(); i++) same = Arrays.equals(now.get(i), was.get(i));
+                if (same || player.isEmpty()) continue;        // group skipped: its old points stay
+                for (int[] p : now) check(gapTo(player, p[0], p[1], 1, 1) >= o.usedGap - 1e-9,
+                        tag + " rally point " + Arrays.toString(p) + " too close to the player");
+            }
+        }
     }
 
     static byte[] withSync(AowMap m) { AowMap c = m.copy(); c.syncPassability(pass); return c.toBytes(); }
@@ -113,6 +165,7 @@ public class RandomGenTest {
                     o.replaceObjects = combo != 6;
                     o.buildingCount = 5 + r.nextInt(46);
                     o.pathPoints = 1 + r.nextInt(4); o.pathDistance = r.nextInt(3);
+                    o.safeGap = new int[]{0, 8, 15, 20, 30}[r.nextInt(5)];
                     if (combo == 7) { o.side = 0; o.replaceBuildings = false; o.buildingCount = 6; }
                     if (combo == 8) o.area = new int[]{r.nextInt(orig.width - 20), r.nextInt(orig.height - 20), 20, 20};
                     String tag = "map" + i + " seed " + o.seed + " combo " + combo;
@@ -147,6 +200,7 @@ public class RandomGenTest {
             }
         }
         System.out.println("runs " + runs + ", refused " + refused + ", buildings placed " + got + "/" + wanted + ", slowest " + worst + " ms");
+        System.out.println("distance checked in " + gapRuns + " runs, " + gapRelaxed + " of them with a lowered distance");
         System.out.println(fails == 0 ? "ALL OK" : fails + " FAILURES");
         System.exit(fails == 0 ? 0 : 1);
     }
