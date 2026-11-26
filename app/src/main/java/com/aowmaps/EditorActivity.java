@@ -793,6 +793,15 @@ public class EditorActivity extends Activity implements MapView.Listener {
         final SeekBar sPoints = slider(s4, "Titik per grup", "", 1, AowMap.MAX_PATH_POINTS, last.pathPoints);
         final RadioButton[] dist = choices(s4, new String[]{"Dekat", "Sedang", "Maju"}, last.pathDistance);
 
+        TextView gapHint = new TextView(this);
+        gapHint.setText("Bangunan dan titik kumpul pasukan musuh tidak ditaruh lebih dekat dari jarak ini ke bangunan dan spawn "
+                + "pemain (0 = tanpa batas). Kalau areanya terlalu sempit, jarak diturunkan otomatis (paling rendah "
+                + RandomGen.MIN_SAFE_GAP + " sel).");
+        gapHint.setTextSize(12);
+        gapHint.setPadding(0, dp(10), 0, 0);
+        form.addView(gapHint);
+        final SeekBar sGap = slider(form, "Jarak aman musuh dari pemain", " sel", 0, 40, last.safeGap);
+
         TextView seedLabel = new TextView(this);
         seedLabel.setText("Seed (kosongkan = acak baru; isi angka yang sama untuk hasil yang sama)");
         form.addView(seedLabel);
@@ -822,6 +831,7 @@ public class EditorActivity extends Activity implements MapView.Listener {
                         o.replaceBuildings = cReplaceBld.isChecked();
                         o.pathPoints = value(sPoints, 1);
                         o.pathDistance = dist[0].isChecked() ? 0 : dist[2].isChecked() ? 2 : 1;
+                        o.safeGap = value(sGap, 0);
                         genVisibleOnly = cVisible.isChecked();
                         if (o.buildings && genVisibleOnly) {
                             if (visible[2] < 5 || visible[3] < 5) { toast("Area yang terlihat terlalu kecil, perkecil zoom dulu"); return; }
