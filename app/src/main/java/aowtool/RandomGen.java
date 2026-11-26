@@ -39,7 +39,19 @@ public final class RandomGen {
         public int[] area;
         /** Rally points per AI group (1..4) and how far from the base (0 near, 1 middle, 2 forward). */
         public int pathPoints = 2, pathDistance = 1;
+        /**
+         * Buildings and rally points of the enemy must stay at least this many cells (straight line) away from the
+         * player's buildings and unit spawns; 0 = no limit. When the map leaves too little room the generator lowers
+         * it step by step, but never below min(safeGap, {@link #MIN_SAFE_GAP}). Buildings of the player side keep the
+         * same distance from the enemy.
+         */
+        public int safeGap = 20;
+        /** Result: the distance that was really kept (can be lower than safeGap), -1 when no limit was applied. */
+        public int usedGap = -1;
     }
+
+    /** The distance the generator never gives up (when the requested one is smaller, that one is used). */
+    public static final int MIN_SAFE_GAP = 8;
 
     // ------------------------------------------------------------------ tileset tables
 
@@ -161,6 +173,7 @@ public final class RandomGen {
     }
 
     private void run() {
+        o.usedGap = -1;
         collectKeys();
         if (o.terrain) terrain();
         if (o.terrain || o.objects) objects();
@@ -854,6 +867,57 @@ public final class RandomGen {
         return out;
     }
 
+    /** Every cell a side occupies: all cells of its buildings (walls left out) and its scripted unit spawns. */
+    private List<int[]> presenceCells(int side) {
+        List<int[]> out = new ArrayList<int[]>();
+        for (int[] b : m.buildings) {
+            if (AowMap.isWall(b[0]) || AowMap.owner(b[0]) != side) continue;
+            int[] f = AowMap.footprint(b[0]);
+            for (int y = b[2]; y < b[2] + f[1]; y++)
+                for (int x = b[1]; x < b[1] + f[0]; x++) if (in(x, y)) out.add(new int[]{x, y});
+        }
+        for (int[] e : m.script())
+            if (e[0] == 27 && (e[5] >= 3) == (side == 0) && in(e[1], e[2])) out.add(new int[]{e[1], e[2]});
+        return out;
+    }
+
+    /** Straight-line distance (cells) from every cell to the nearest of {@code cells}; null when there are none. */
+    private double[] distanceField(List<int[]> cells) {
+        if (cells.isEmpty()) return null;
+        double[] f = new double[w * h];
+        for (int i = 0; i < f.length; i++) {
+            int x = i % w, y = i / w, best = Integer.MAX_VALUE;
+            for (int[] c : cells) best = Math.min(best, (c[0] - x) * (c[0] - x) + (c[1] - y) * (c[1] - y));
+            f[i] = Math.sqrt(best);
+        }
+        return f;
+    }
+
+    /** Distance a rectangle keeps from the field's cells (its closest cell); infinity without a field. */
+    private double rectGap(double[] field, int x, int y, int rw, int rh) {
+        if (field == null) return Double.MAX_VALUE;
+        double best = Double.MAX_VALUE;
+        for (int yy = y; yy < y + rh; yy++)
+            for (int xx = x; xx < x + rw; xx++) if (in(xx, yy)) best = Math.min(best, field[yy * w + xx]);
+        return best;
+    }
+
+    /** The gaps to try, from the requested one down to the floor, in steps of 4 (e.g. 20, 16, 12, 8). */
+    private int[] gapSteps() {
+        int want = Math.max(0, o.safeGap);
+        int floor = Math.min(want, MIN_SAFE_GAP);
+        List<Integer> l = new ArrayList<Integer>();
+        for (int g = want; g > floor; g -= 4) l.add(g);
+        l.add(floor);
+        int[] out = new int[l.size()];
+        for (int i = 0; i < out.length; i++) out[i] = l.get(i);
+        return out;
+    }
+
+    private void noteGap(int gap) {
+        if (gap > 0) o.usedGap = o.usedGap < 0 ? gap : Math.min(o.usedGap, gap);
+    }
+
     private static int[] centre(List<int[]> pts, int dx, int dy) {
         if (pts.isEmpty()) return new int[]{dx, dy};
         long x = 0, y = 0;
@@ -973,11 +1037,67 @@ public final class RandomGen {
         for (int i = 0; given < total; i = (i + 1) % bases.size()) { bases.get(i).count++; given++; }
 
         int[] foe = centre(presence(old, 1 - side), w / 2, h / 2);
-        int placed = 0, cleared = 0;
         int hqBefore = 0, hqKept = 0;
         for (int[] b : old) if (isHq(b[0]) && AowMap.owner(b[0]) == side) hqBefore++;
         for (int[] b : m.buildings) if (isHq(b[0]) && AowMap.owner(b[0]) == side) hqKept++;
-        int[] hqLeft = {Math.max(1, hqBefore) - hqKept};
+        int hqFree = Math.max(1, hqBefore) - hqKept;
+
+        // Keep away from the other side: first try the requested distance; if too few buildings fit, lower it step by
+        // step (never below the floor) and take the first distance where at least 90 % fit, else the best result.
+        double[] far = distanceField(presenceCells(1 - side));
+        int[] steps = far == null ? new int[]{0} : gapSteps();
+        int enough = (total * 9 + 9) / 10;
+        List<int[]> b0 = new ArrayList<int[]>(m.buildings), o0 = new ArrayList<int[]>(m.objects);
+        List<int[]> bestB = null, bestO = null;
+        int bestPlaced = -1, bestCleared = 0, bestGap = 0;
+        for (int gap : steps) {
+            m.buildings.clear(); m.buildings.addAll(b0);
+            m.objects.clear(); m.objects.addAll(o0);
+            int[] res = placeAll(bases, foe, far, gap, new int[]{hqFree});
+            if (res[0] > bestPlaced) {
+                bestPlaced = res[0]; bestCleared = res[1]; bestGap = gap;
+                bestB = new ArrayList<int[]>(m.buildings);
+                bestO = new ArrayList<int[]>(m.objects);
+            }
+            if (res[0] >= enough) break;
+        }
+        m.buildings.clear(); m.buildings.addAll(bestB);
+        m.objects.clear(); m.objects.addAll(bestO);
+        int placed = bestPlaced, cleared = bestCleared;
+        if (placed == 0) {
+            throw new IllegalStateException(far != null && o.safeGap > 0
+                    ? "Tidak ada tempat kosong untuk bangunan di area itu yang berjarak minimal "
+                    + Math.min(o.safeGap, MIN_SAFE_GAP) + " sel dari "
+                    + (side == 1 ? "pemain" : "musuh") + " (kecilkan jarak aman atau pilih area lain)"
+                    : "Tidak ada tempat kosong untuk bangunan di area itu");
+        }
+        noteGap(bestGap);
+        String gapNote = "";
+        if (far != null && o.safeGap > 0) {
+            double closest = Double.MAX_VALUE;
+            for (int[] b : m.buildings) {
+                if (AowMap.isWall(b[0]) || AowMap.owner(b[0]) != side || contains(b0, b)) continue;
+                int[] f = AowMap.footprint(b[0]);
+                closest = Math.min(closest, rectGap(far, b[1], b[2], f[0], f[1]));
+            }
+            if (closest < Double.MAX_VALUE)
+                gapNote = ", terdekat " + (int) closest + " sel dari " + (side == 1 ? "pemain" : "musuh")
+                        + (bestGap < o.safeGap ? " (jarak aman diturunkan dari " + o.safeGap + " ke " + bestGap
+                        + " karena areanya sempit)" : "");
+        }
+        report.add("Bangunan " + (side == 1 ? "musuh" : "pemain") + ": " + (removed > 0 ? removed + " dihapus, " : "")
+                + placed + " ditaruh" + (placed < total ? " dari " + total + " (area penuh atau terlalu dekat)" : "")
+                + (cleared > 0 ? ", " + cleared + " objek penghalang dibuang" : "") + gapNote);
+    }
+
+    private static boolean contains(List<int[]> list, int[] b) {
+        for (int[] x : list) if (x == b) return true;
+        return false;
+    }
+
+    /** One pass over all bases with a fixed distance; returns {buildings placed, objects cleared}. */
+    private int[] placeAll(List<Base> bases, int[] foe, double[] far, int gap, int[] hqLeft) {
+        int side = o.side, placed = 0, cleared = 0;
         for (Base base : bases) {
             List<Integer> kinds = composition(base, side == 1 ? ENEMY_MIX : PLAYER_MIX,
                     side == 1 ? ENEMY_MUST : PLAYER_MUST, hqLeft);
@@ -995,15 +1115,12 @@ public final class RandomGen {
                     int[] ar = clip(base.area[0] - grow, base.area[1] - grow, base.area[0] + base.area[2] + grow,
                             base.area[1] + base.area[3] + grow);
                     if (grow > 0 && o.area != null) break;      // stay inside a hand-picked area
-                    r = place(kind, base.group, ar, foe, ref);
+                    r = place(kind, base.group, ar, foe, ref, far, gap);
                 }
                 if (r >= 0) { placed++; cleared += r; }
             }
         }
-        if (placed == 0) throw new IllegalStateException("Tidak ada tempat kosong untuk bangunan di area itu");
-        report.add("Bangunan " + (side == 1 ? "musuh" : "pemain") + ": " + (removed > 0 ? removed + " dihapus, " : "")
-                + placed + " ditaruh" + (placed < total ? " dari " + total + " (area penuh)" : "")
-                + (cleared > 0 ? ", " + cleared + " objek penghalang dibuang" : ""));
+        return new int[]{placed, cleared};
     }
 
     /** An open cell of the largest walkable region inside the area; new buildings must stay reachable from it. */
@@ -1029,7 +1146,7 @@ public final class RandomGen {
     private static boolean isDefence(int kind) { return kind == 13 || kind == 14 || kind == 5 || kind == 7; }
 
     /** Places one building; returns how many objects had to be removed for it, or -1 when there is no spot. */
-    private int place(final int kind, int group, int[] ar, int[] foe, int ref) {
+    private int place(final int kind, int group, int[] ar, int[] foe, int ref, double[] far, int gap) {
         int[] f = AowMap.footprint(kind);
         boolean[] blk = blocked();
         boolean[] taken = new boolean[w * h];        // buildings with a one cell gap, zones, script cells
@@ -1065,7 +1182,11 @@ public final class RandomGen {
                 if (ok && (kind == 10 || kind == 11 || kind == 2 || kind == 3)) {
                     int ex = x + f[0] - 1, ey = y + f[1];
                     ok = in(ex, ey) && !blk[ey * w + ex] && !taken[ey * w + ex];
+                    // ... and that exit must keep its distance too, otherwise the units stand there
+                    if (ok && gap > 0) ok = far[ey * w + ex] >= gap;
                 }
+                // stay away from the other side
+                if (ok && gap > 0 && rectGap(far, x, y, f[0], f[1]) < gap) ok = false;
                 if (!ok) continue;
                 double toFoe = Math.sqrt((x - foe[0]) * (x - foe[0]) + (y - foe[1]) * (y - foe[1]));
                 int near = 40;
@@ -1142,6 +1263,10 @@ public final class RandomGen {
             if (c >= 0) targets.add(c);
         }
         int[] toPlayer = distances(blk, targets);
+        double[] far = distanceField(presenceCells(0));
+        int[] steps = far == null ? new int[]{0} : gapSteps();
+        double closest = Double.MAX_VALUE;
+        StringBuilder skipped = new StringBuilder();
         int want = Math.max(1, Math.min(AowMap.MAX_PATH_POINTS, o.pathPoints));
         int[][] bands = {{2, 7}, {6, 15}, {14, 30}};
         int[] band = bands[Math.max(0, Math.min(2, o.pathDistance))];
@@ -1159,43 +1284,71 @@ public final class RandomGen {
             int[] fromBase = distances(blk, exits);
             int baseToPlayer = Integer.MAX_VALUE;
             for (int c : exits) if (toPlayer[c] >= 0) baseToPlayer = Math.min(baseToPlayer, toPlayer[c]);
-            List<double[]> spots = new ArrayList<double[]>();
-            for (int pass2 = 0; spots.size() < want && pass2 < 3; pass2++) {
-                spots.clear();
-                for (int i = 0; i < w * h; i++) {
-                    int d = fromBase[i];
-                    if (d < 0 || used[i]) continue;
-                    if (pass2 == 0 && (d < band[0] || d > band[1])) continue;
-                    if (pass2 == 1 && d > band[1] + 10) continue;
-                    int x = i % w, y = i / w, open = 0;
-                    for (int dy = -1; dy <= 1; dy++)
-                        for (int dx = -1; dx <= 1; dx++)
-                            if (in(x + dx, y + dy) && !blk[(y + dy) * w + x + dx]) open++;
-                    if (pass2 < 2 && open < 8) continue;       // units need some room to gather
-                    double score = rnd.nextDouble() * 6;
-                    if (toPlayer[i] >= 0 && baseToPlayer != Integer.MAX_VALUE) score += (baseToPlayer - toPlayer[i]) * 0.8;
-                    spots.add(new double[]{score, i});
-                }
-            }
-            Collections.sort(spots, new Comparator<double[]>() {
-                public int compare(double[] p, double[] q) { return Double.compare(q[0], p[0]); }
-            });
+            // Keep the points away from the player: first the requested distance, then lower step by step (never
+            // below the floor); the first distance that gives all wanted points wins, else the one with most points.
             List<int[]> pts = new ArrayList<int[]>();
-            for (int gap = 5; pts.size() < want && gap >= 1; gap -= 2) {
-                for (double[] s : spots) {
-                    if (pts.size() >= want) break;
-                    int x = (int) s[1] % w, y = (int) s[1] / w;
-                    boolean far = true;
-                    for (int[] p : pts) if (Math.max(Math.abs(p[0] - x), Math.abs(p[1] - y)) < gap) far = false;
-                    if (far) { pts.add(new int[]{x, y}); used[y * w + x] = true; }
+            int gapHere = 0;
+            for (int gap : steps) {
+                List<double[]> spots = new ArrayList<double[]>();
+                for (int pass2 = 0; spots.size() < want && pass2 < 3; pass2++) {
+                    spots.clear();
+                    for (int i = 0; i < w * h; i++) {
+                        int d = fromBase[i];
+                        if (d < 0 || used[i]) continue;
+                        if (gap > 0 && far[i] < gap) continue;
+                        if (pass2 == 0 && (d < band[0] || d > band[1])) continue;
+                        if (pass2 == 1 && d > band[1] + 10) continue;
+                        int x = i % w, y = i / w, open = 0;
+                        for (int dy = -1; dy <= 1; dy++)
+                            for (int dx = -1; dx <= 1; dx++)
+                                if (in(x + dx, y + dy) && !blk[(y + dy) * w + x + dx]) open++;
+                        if (pass2 < 2 && open < 8) continue;       // units need some room to gather
+                        double score = rnd.nextDouble() * 6;
+                        if (toPlayer[i] >= 0 && baseToPlayer != Integer.MAX_VALUE)
+                            score += (baseToPlayer - toPlayer[i]) * 0.8;
+                        spots.add(new double[]{score, i});
+                    }
                 }
+                Collections.sort(spots, new Comparator<double[]>() {
+                    public int compare(double[] p, double[] q) { return Double.compare(q[0], p[0]); }
+                });
+                List<int[]> got = new ArrayList<int[]>();
+                for (int spread = 5; got.size() < want && spread >= 1; spread -= 2) {
+                    for (double[] s : spots) {
+                        if (got.size() >= want) break;
+                        int x = (int) s[1] % w, y = (int) s[1] / w;
+                        boolean apart = true;
+                        for (int[] p : got) if (Math.max(Math.abs(p[0] - x), Math.abs(p[1] - y)) < spread) apart = false;
+                        if (apart) got.add(new int[]{x, y});
+                    }
+                }
+                if (got.size() > pts.size()) { pts = got; gapHere = gap; }
+                if (pts.size() >= want) break;
             }
-            if (pts.isEmpty()) continue;
+            if (pts.isEmpty()) {
+                skipped.append(skipped.length() == 0 ? "" : ", ").append(g);
+                continue;
+            }
+            for (int[] p : pts) {
+                used[p[1] * w + p[0]] = true;
+                if (far != null) closest = Math.min(closest, far[p[1] * w + p[0]]);
+            }
+            noteGap(gapHere);
             String err = m.setAttackPath(g, pts);
             if (err != null) throw new IllegalStateException(err);
             sb.append(sb.length() == 0 ? "" : ", ").append("grup ").append(g).append(": ").append(pts.size()).append(" titik");
         }
-        report.add(sb.length() > 0 ? "Jalur serang (titik kumpul): " + sb
+        String note = "";
+        if (far != null && o.safeGap > 0 && closest < Double.MAX_VALUE) {
+            note = ", terdekat " + (int) closest + " sel dari pemain";
+            if (o.usedGap >= 0 && o.usedGap < o.safeGap)
+                note += " (jarak aman diturunkan dari " + o.safeGap + " ke " + o.usedGap + " karena areanya sempit)";
+        }
+        if (skipped.length() > 0)
+            note += "; grup " + skipped + " tidak diubah karena tidak ada tempat yang berjarak minimal "
+                    + Math.min(o.safeGap, MIN_SAFE_GAP) + " sel dari pemain";
+        report.add(sb.length() > 0 ? "Jalur serang (titik kumpul): " + sb + note
+                : skipped.length() > 0 ? "Jalur serang: tidak diubah" + note
                 : "Jalur serang: tidak diubah, tidak ada Barak/Pabrik musuh yang punya jalan keluar");
     }
 }
