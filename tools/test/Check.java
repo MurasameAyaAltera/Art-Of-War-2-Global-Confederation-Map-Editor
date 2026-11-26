@@ -13,13 +13,13 @@ public class Check {
             byte[] orig = Files.readAllBytes(Paths.get("../x/" + e.file));
             byte[] re = e.map.toBytes();
             AowMap again = AowMap.parse(re);
-            boolean sem = Arrays.equals(again.tiles, e.map.tiles) && Arrays.equals(again.tail, e.map.tail)
+            boolean sem = Arrays.equals(again.tiles, e.map.tiles) && Arrays.equals(again.rest, e.map.rest) && Arrays.equals(again.fog, e.map.fog) && again.buildings.size() == e.map.buildings.size()
                     && again.objects.size() == e.map.objects.size();
             // original map's object list is already y,x sorted?
             boolean same = Arrays.equals(orig, re);
             if (same) identical++;
             System.out.printf("%2d %-12s %3dx%-3d ts=%d objs=%4d tail=%4d  roundtrip-semantic=%s byte-identical=%s%n",
-                    e.slot, e.name, e.map.width, e.map.height, e.map.tileset, e.map.objects.size(), e.map.tail.length, sem, same);
+                    e.slot, e.name, e.map.width, e.map.height, e.map.tileset, e.map.objects.size(), e.map.rest.length, sem, same);
         }
         System.out.println("byte-identical: " + identical + "/" + p.maps.size());
 

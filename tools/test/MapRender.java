@@ -44,6 +44,21 @@ public class MapRender {
             g.drawImage(b, (o[1] - x0) * 30 - t.ox, (o[2] - y0) * 20 - t.oy, null);
             drawn++;
         }
+        List<int[]> blds = new ArrayList<int[]>(m.buildings);
+        Collections.sort(blds, new Comparator<int[]>() { public int compare(int[] p, int[] q) { return p[2] != q[2] ? p[2] - q[2] : p[1] - q[1]; } });
+        for (int[] bd : blds) {
+            Art.Img t = art.kindImage(bd[0]);
+            int[] fp = AowMap.footprint(bd[0]);
+            g.setColor(bd[0] < 8 ? new Color(0, 160, 255, 90) : new Color(255, 60, 60, 90));
+            g.fillRect((bd[1] - x0) * 30, (bd[2] - y0) * 20, fp[0] * 30, fp[1] * 20);
+            if (t == null) continue;
+            BufferedImage b = new BufferedImage(t.w, t.h, BufferedImage.TYPE_INT_ARGB);
+            b.setRGB(0, 0, t.w, t.h, t.px, 0, t.w);
+            g.drawImage(b, (bd[1] - x0) * 30 - t.ox, (bd[2] - y0) * 20 - t.oy, null);
+        }
+        g.setColor(Color.YELLOW);
+        for (int[] sp : m.spawns()) { g.fillOval((sp[0] - x0) * 30 + 8, (sp[1] - y0) * 20 + 4, 14, 14); }
+        System.out.println("buildings " + blds.size());
         ImageIO.write(img, "png", new File(out));
         System.out.println(m.width + "x" + m.height + " ts" + m.tileset + " objs " + objs.size() + " drawn " + drawn);
     }
