@@ -26,6 +26,7 @@ final class ArtCache {
     private final Art art;
     private final HashMap<Integer, Spr> tiles = new HashMap<Integer, Spr>();
     private final HashMap<Integer, Spr> objs = new HashMap<Integer, Spr>();
+    private final HashMap<Integer, Spr> blds = new HashMap<Integer, Spr>();
     private final HashSet<Integer> ready = new HashSet<Integer>();
 
     private ArtCache(Art art) { this.art = art; }
@@ -82,6 +83,17 @@ final class ArtCache {
         return s == NONE ? null : s;
     }
 
+    /** Building art for kind 0..14 (0..7 player, 8..14 enemy), or null when unavailable. */
+    synchronized Spr building(int kind) {
+        Integer k = Integer.valueOf(kind);
+        Spr s = blds.get(k);
+        if (s == null) {
+            s = wrap(art.kindImage(kind));
+            blds.put(k, s);
+        }
+        return s == NONE ? null : s;
+    }
+
     int tileCount(int ts) { return art.tileCount(ts); }
     int objectCount(int ts) { return art.objectCount(ts); }
     int[] randomGroupStarts(int ts) { return art.randomGroupStarts(ts); }
@@ -92,6 +104,7 @@ final class ArtCache {
         int nt = tileCount(ts), no = objectCount(ts);
         for (int i = 0; i < nt; i++) tile(ts, i);
         for (int i = 0; i < no; i++) obj(ts, i);
+        for (int i = 0; i < aowtool.AowMap.KINDS; i++) building(i);
         synchronized (this) { ready.add(Integer.valueOf(ts)); }
     }
 

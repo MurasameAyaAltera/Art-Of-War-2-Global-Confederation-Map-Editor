@@ -14,6 +14,8 @@ import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
+import android.text.InputType;
 
 import java.util.ArrayList;
 import java.util.TreeSet;
@@ -26,9 +28,10 @@ public class EditorActivity extends Activity implements MapView.Listener {
     private MapView view;
     private TextView info, title;
     private LinearLayout palette;
-    private final Button[] modeBtns = new Button[5];
+    private final Button[] modeBtns = new Button[9];
+    private Button btnUnits;
     private int mode = MapView.PAN;
-    private int tile = 0, objType = 0;
+    private int tile = 0, objType = 0, bldKind = 0;
     private int[] tileIds, objIds;            // ids used by maps of this tileset
     private int[] allTileIds, allObjIds;      // every id the tileset defines (needs the game art)
     private boolean showAll = false;
@@ -80,19 +83,22 @@ public class EditorActivity extends Activity implements MapView.Listener {
 
         LinearLayout modes = new LinearLayout(this);
         String[] names = {"Geser", "Kuas", "Objek+", "Objek-", "Pipet"};
-        for (int i = 0; i < names.length; i++) {
-            final int mi = i;
-            Button bt = new Button(this);
-            bt.setText(names[i]);
-            bt.setTextSize(11);
-            bt.setAllCaps(false);
-            bt.setOnClickListener(new View.OnClickListener() {
-                public void onClick(View v) { setMode(mi); }
-            });
-            modeBtns[i] = bt;
-            modes.addView(bt, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        }
+        for (int i = 0; i < names.length; i++) addMode(modes, names[i], i);
         root.addView(modes);
+
+        LinearLayout modes2 = new LinearLayout(this);
+        String[] names2 = {"Bangun+", "Bangun-", "Pindah", "Edit"};
+        for (int i = 0; i < names2.length; i++) addMode(modes2, names2[i], MapView.BLD_ADD + i);
+        btnUnits = new Button(this);
+        btnUnits.setText("Unit");
+        btnUnits.setTextSize(11);
+        btnUnits.setAllCaps(false);
+        btnUnits.setBackgroundColor(0xFFCCCCCC);
+        btnUnits.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { toggleUnits(); }
+        });
+        modes2.addView(btnUnits, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(modes2);
 
         HorizontalScrollView hs = new HorizontalScrollView(this);
         palette = new LinearLayout(this);
@@ -171,6 +177,28 @@ public class EditorActivity extends Activity implements MapView.Listener {
         return a;
     }
 
+    private void addMode(LinearLayout row, String label, final int modeId) {
+        Button bt = new Button(this);
+        bt.setText(label);
+        bt.setTextSize(11);
+        bt.setAllCaps(false);
+        bt.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { setMode(modeId); }
+        });
+        modeBtns[modeId] = bt;
+        row.addView(bt, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+    }
+
+    private void toggleUnits() {
+        boolean on = !view.isShowUnits();
+        view.setShowUnits(on);
+        btnUnits.setBackgroundColor(on ? 0xFF2E7D32 : 0xFFCCCCCC);
+        btnUnits.setTextColor(on ? Color.WHITE : Color.BLACK);
+        info.setText(on
+                ? view.spawnCount() + " titik spawn unit dari skrip peta (biru = pemain, merah = musuh). Ketuk sel untuk detail. Hanya dibaca, tidak bisa diedit."
+                : "Penanda unit disembunyikan.");
+    }
+
     private Button addBtn(LinearLayout row, String text, View.OnClickListener l) {
         Button bt = new Button(this);
         bt.setText(text);
@@ -183,48 +211,60 @@ public class EditorActivity extends Activity implements MapView.Listener {
 
     private void updateTitle() {
         title.setText(entry.name + "  " + entry.map.width + "x" + entry.map.height
-                + "  tileset " + entry.map.tileset + "  objek " + entry.map.objects.size());
+                + "  tileset " + entry.map.tileset + "  objek " + entry.map.objects.size()
+                + "  bangunan " + entry.map.buildings.size());
     }
 
     private void setMode(int m) {
         mode = m;
         view.setMode(m);
         for (int i = 0; i < modeBtns.length; i++) {
+            if (modeBtns[i] == null) continue;
             modeBtns[i].setBackgroundColor(i == m ? 0xFF2E7D32 : 0xFFCCCCCC);
             modeBtns[i].setTextColor(i == m ? Color.WHITE : Color.BLACK);
         }
         buildPalette();
-        info.setText(m == MapView.PAN ? "Geser dengan satu jari, cubit untuk zoom."
-                : m == MapView.PAINT ? "Pilih tile di atas, lalu sentuh/seret di peta."
-                : m == MapView.OBJ_ADD ? "Pilih tipe objek, lalu ketuk sel untuk menaruh."
-                : m == MapView.OBJ_DEL ? "Ketuk sel untuk menghapus objek di sana."
-                : "Ketuk sel untuk mengambil tile-nya.");
+        String t;
+        switch (m) {
+            case MapView.PAN: t = "Geser dengan satu jari, cubit untuk zoom. Ketuk sel untuk info."; break;
+            case MapView.PAINT: t = "Pilih tile di atas, lalu sentuh/seret di peta."; break;
+            case MapView.OBJ_ADD: t = "Pilih tipe objek, lalu ketuk sel untuk menaruh."; break;
+            case MapView.OBJ_DEL: t = "Ketuk sel untuk menghapus objek di sana."; break;
+            case MapView.BLD_ADD: t = "Pilih bangunan di atas, lalu ketuk peta untuk menaruhnya. Biru = pemain, merah = musuh."; break;
+            case MapView.BLD_DEL: t = "Ketuk bangunan untuk menghapusnya."; break;
+            case MapView.BLD_MOVE: t = "Sentuh bangunan lalu seret untuk memindahkan (hanya ke posisi yang muat)."; break;
+            case MapView.BLD_EDIT: t = "Ketuk bangunan untuk mengubah tipe, posisi, atau grup AI."; break;
+            default: t = "Ketuk sel untuk mengambil tile-nya."; break;
+        }
+        info.setText(t);
     }
 
     /** Palette cell: game art (or flat colour as fallback) with the id in the corner. */
     private class Thumb extends View {
         private final ArtCache.Spr spr;
         private final int color, id;
-        private final boolean selected, isObj;
+        private final boolean selected, isObj, isBld;
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Rect r = new Rect();
 
-        Thumb(int id, boolean isObj, boolean selected) {
+        Thumb(int id, boolean isObj, boolean isBld, boolean selected) {
             super(EditorActivity.this);
-            this.id = id; this.isObj = isObj; this.selected = selected;
+            this.id = id; this.isObj = isObj; this.isBld = isBld; this.selected = selected;
             ArtCache.Spr sp = null;
-            if (art != null && art.isReady(tileset)) sp = isObj ? art.obj(tileset, id) : art.tile(tileset, id);
+            if (art != null && art.isReady(tileset)) {
+                sp = isBld ? art.building(id) : isObj ? art.obj(tileset, id) : art.tile(tileset, id);
+            }
             spr = sp;
-            color = Palette.color(isObj ? id + 90 : id);
+            color = isBld ? (AowMap.owner(id) == 0 ? 0xFF1565C0 : 0xFFB71C1C) : Palette.color(isObj ? id + 90 : id);
         }
 
         @Override
         protected void onDraw(Canvas c) {
             int w = getWidth(), h = getHeight();
-            c.drawColor(isObj ? 0xFF4A5A40 : 0xFF303030);
+            c.drawColor(isBld ? (AowMap.owner(id) == 0 ? 0xFF24476B : 0xFF6B2A2A) : isObj ? 0xFF4A5A40 : 0xFF303030);
             if (spr != null) {
                 float sc = Math.min((w - dp(6)) / (float) spr.w, (h - dp(6)) / (float) spr.h);
-                if (isObj) sc = Math.min(sc, 2f);
+                if (isObj || isBld) sc = Math.min(sc, 2f);
                 int dw = Math.max(1, Math.round(spr.w * sc)), dh = Math.max(1, Math.round(spr.h * sc));
                 r.set((w - dw) / 2, (h - dh) / 2, (w - dw) / 2 + dw, (h - dh) / 2 + dh);
                 p.setFilterBitmap(true);
@@ -249,17 +289,30 @@ public class EditorActivity extends Activity implements MapView.Listener {
 
     private void buildPalette() {
         palette.removeAllViews();
+        final boolean bldMode = mode >= MapView.BLD_ADD && mode <= MapView.BLD_EDIT;
         final boolean objMode = mode == MapView.OBJ_ADD || mode == MapView.OBJ_DEL;
-        int[] ids = objMode ? (showAll ? allObjIds : objIds) : (showAll ? allTileIds : tileIds);
-        int sel = objMode ? objType : tile;
+        int[] ids;
+        if (bldMode) {
+            ids = new int[AowMap.KINDS];
+            for (int i = 0; i < ids.length; i++) ids[i] = i;
+        } else {
+            ids = objMode ? (showAll ? allObjIds : objIds) : (showAll ? allTileIds : tileIds);
+        }
+        int sel = bldMode ? bldKind : objMode ? objType : tile;
         for (final int id : ids) {
-            Thumb t = new Thumb(id, objMode, id == sel);
+            Thumb t = new Thumb(id, objMode, bldMode, id == sel);
             t.setAlpha(id == sel ? 1f : 0.8f);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(64), dp(48));
             lp.setMargins(dp(2), dp(2), dp(2), dp(2));
             t.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
-                    if (objMode) {
+                    if (bldMode) {
+                        bldKind = id; view.setBuildingKind(id);
+                        int[] fp = AowMap.footprint(id);
+                        if (mode != MapView.BLD_ADD) setMode(MapView.BLD_ADD);
+                        info.setText("Bangunan tipe " + id + " (" + (AowMap.owner(id) == 0 ? "pemain" : "musuh")
+                                + ", " + fp[0] + "x" + fp[1] + " sel). Ketuk peta untuk menaruh.");
+                    } else if (objMode) {
                         objType = id; view.setObjType(id);
                         if (art != null) {
                             int[] fp = art.footprint(tileset, id);
@@ -276,6 +329,72 @@ public class EditorActivity extends Activity implements MapView.Listener {
         }
         view.setTile(tile);
         view.setObjType(objType);
+        view.setBuildingKind(bldKind);
+    }
+
+    // ------------------------------------------------------------------ building dialog
+
+    private EditText numField(LinearLayout parent, String label, int value) {
+        TextView tv = new TextView(this);
+        tv.setText(label);
+        parent.addView(tv);
+        EditText et = new EditText(this);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER);
+        et.setText(String.valueOf(value));
+        et.setSelectAllOnFocus(true);
+        parent.addView(et);
+        return et;
+    }
+
+    private static int num(EditText et, int def) {
+        try { return Integer.parseInt(et.getText().toString().trim()); } catch (NumberFormatException e) { return def; }
+    }
+
+    @Override
+    public void onBuilding(final int index) {
+        final AowMap m = entry.map;
+        if (index < 0 || index >= m.buildings.size()) return;
+        final int[] b = m.buildings.get(index);
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(8), dp(20), 0);
+        TextView hint = new TextView(this);
+        hint.setText("Tipe 0-7 = pemain (biru), 8-14 = musuh (merah). Grup AI 0-2 menentukan zona/gelombang AI yang memakai bangunan ini.");
+        hint.setTextSize(12);
+        form.addView(hint);
+        final EditText fKind = numField(form, "Tipe (0-14)", b[0]);
+        final EditText fX = numField(form, "X", b[1]);
+        final EditText fY = numField(form, "Y", b[2]);
+        final EditText fG = numField(form, "Grup AI (0-2)", b[3]);
+        new AlertDialog.Builder(this)
+                .setTitle("Bangunan #" + index + "  " + AowMap.footprint(b[0])[0] + "x" + AowMap.footprint(b[0])[1])
+                .setView(form)
+                .setPositiveButton("Terapkan", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        int k = num(fKind, b[0]), x = num(fX, b[1]), y = num(fY, b[2]), g = num(fG, b[3]);
+                        if (g < 0 || g > 2) { Toast.makeText(EditorActivity.this, "Grup AI harus 0-2", Toast.LENGTH_LONG).show(); return; }
+                        boolean moved = k != b[0] || x != b[1] || y != b[2];
+                        if (moved) {
+                            String why = m.checkBuilding(k, x, y, index);
+                            if (why != null) { Toast.makeText(EditorActivity.this, why, Toast.LENGTH_LONG).show(); return; }
+                        }
+                        if (!moved && g == b[3]) return;
+                        view.checkpoint();
+                        b[0] = k; b[1] = x; b[2] = y; b[3] = g;
+                        view.select(index);
+                        info.setText(MapView.describeBuilding(b));
+                    }
+                })
+                .setNeutralButton("Hapus", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        view.checkpoint();
+                        m.buildings.remove(index);
+                        view.select(-1);
+                        updateTitle();
+                    }
+                })
+                .setNegativeButton("Batal", null)
+                .show();
     }
 
     private void rename() {
