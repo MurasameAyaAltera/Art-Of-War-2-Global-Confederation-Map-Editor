@@ -63,6 +63,11 @@ public class JarProject {
         for (Entry e : maps) e.map = AowMap.parse(files.get(e.file));
     }
 
+    /** Raw bytes of any resource inside the opened jar (e.g. "i0", "d0", "ml"), or null. */
+    public byte[] resource(String name) {
+        return files.get(name);
+    }
+
     public Entry add(String name, AowMap map) {
         boolean[] used = new boolean[MAX_SLOTS];
         for (Entry e : maps) used[e.slot] = true;

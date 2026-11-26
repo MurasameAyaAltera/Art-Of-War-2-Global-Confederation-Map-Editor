@@ -76,11 +76,86 @@ public class ClassPatcher {
         return out;
     }
 
-    /** Marks a class as Java 5 (49) so old verifiers do not demand a StackMapTable. */
-    public static byte[] asVersion49(byte[] cls) {
-        byte[] c = cls.clone();
-        c[6] = 0; c[7] = 49;
-        return c;
+    /**
+     * Marks a class as Java 5 (49) AND removes every StackMapTable attribute.
+     * A v49 class must not carry compressed frames: ASM-based converters (JL-Mod / J2ME Loader)
+     * fail with "Class versions V1_5 or less must use F_NEW frames." if they are left in.
+     * Old-style (type inference) verification does not need them.
+     */
+    public static byte[] asVersion49(byte[] cls) throws IOException {
+        int cpCount = u16(cls, 8);
+        int[] off = new int[cpCount];
+        int[] tag = new int[cpCount];
+        int p = 10;
+        for (int i = 1; i < cpCount; i++) {
+            off[i] = p; tag[i] = cls[p] & 255;
+            switch (tag[i]) {
+                case 1: p += 3 + u16(cls, p + 1); break;
+                case 3: case 4: case 9: case 10: case 11: case 12: case 17: case 18: p += 5; break;
+                case 5: case 6: p += 9; i++; break;
+                case 7: case 8: case 16: p += 3; break;
+                case 15: p += 4; break;
+                default: throw new IOException("unknown constant tag " + tag[i]);
+            }
+        }
+        for (int i = 1; i < cpCount; i++) {
+            if (tag[i] == 18) throw new IOException("class uses invokedynamic - compile helper with -source/-target 8 and no lambdas");
+        }
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        DataOutputStream out = new DataOutputStream(bo);
+        out.write(cls, 0, 6);
+        out.writeShort(49);
+        out.write(cls, 8, p - 8);                 // constant pool unchanged
+        out.write(cls, p, 6);                     // access, this, super
+        p += 6;
+        int ic = u16(cls, p); out.write(cls, p, 2 + ic * 2); p += 2 + ic * 2;
+        for (int pass = 0; pass < 2; pass++) {    // fields, then methods
+            int n = u16(cls, p); out.writeShort(n); p += 2;
+            for (int i = 0; i < n; i++) {
+                out.write(cls, p, 6); p += 6;     // access, name, descriptor
+                p = copyAttributes(cls, off, p, out, pass == 1);
+            }
+        }
+        p = copyAttributes(cls, off, p, out, false);   // class attributes
+        return bo.toByteArray();
+    }
+
+    /** Copies an attribute table; inside Code attributes drops StackMapTable. */
+    private static int copyAttributes(byte[] c, int[] off, int p, DataOutputStream out, boolean inMethod) throws IOException {
+        int n = u16(c, p); out.writeShort(n); p += 2;
+        for (int i = 0; i < n; i++) {
+            int nameIdx = u16(c, p);
+            int len = ((c[p + 2] & 255) << 24) | ((c[p + 3] & 255) << 16) | ((c[p + 4] & 255) << 8) | (c[p + 5] & 255);
+            String name = utf(c, off, nameIdx);
+            int body = p + 6;
+            if (inMethod && name.equals("Code")) {
+                int codeLen = ((c[body + 4] & 255) << 24) | ((c[body + 5] & 255) << 16) | ((c[body + 6] & 255) << 8) | (c[body + 7] & 255);
+                int q = body + 8 + codeLen;
+                int excCount = u16(c, q);
+                q += 2 + excCount * 8;
+                int headEnd = q;                      // up to and including exception table
+                int attrCount = u16(c, q); q += 2;
+                ByteArrayOutputStream tail = new ByteArrayOutputStream();
+                DataOutputStream td = new DataOutputStream(tail);
+                int kept = 0;
+                for (int k = 0; k < attrCount; k++) {
+                    String an = utf(c, off, u16(c, q));
+                    int al = ((c[q + 2] & 255) << 24) | ((c[q + 3] & 255) << 16) | ((c[q + 4] & 255) << 8) | (c[q + 5] & 255);
+                    if (!an.equals("StackMapTable")) { td.write(c, q, 6 + al); kept++; }
+                    q += 6 + al;
+                }
+                byte[] t = tail.toByteArray();
+                int newLen = (headEnd - body) + 2 + t.length;
+                out.writeShort(nameIdx); out.writeInt(newLen);
+                out.write(c, body, headEnd - body);
+                out.writeShort(kept);
+                out.write(t, 0, t.length);
+            } else {
+                out.write(c, p, 6 + len);
+            }
+            p = body + len;
+        }
+        return p;
     }
 
     static String utf(byte[] c, int[] off, int idx) {
