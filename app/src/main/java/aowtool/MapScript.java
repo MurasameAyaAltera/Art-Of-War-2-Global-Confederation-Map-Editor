@@ -71,6 +71,26 @@ public final class MapScript {
         return out;
     }
 
+    /**
+     * AI base rectangles {group, x, y, w, h}: the first three of the game's hC lists. Empty when the data does not parse.
+     */
+    public static List<int[]> baseZones(byte[] r) {
+        List<int[]> out = new ArrayList<int[]>();
+        try {
+            int p = 0;
+            for (int i = 0; i < 3; i++) {
+                int c = r[p++] & 255;
+                for (int k = 0; k < c; k++) {
+                    out.add(new int[]{i, r[p] & 255, r[p + 1] & 255, r[p + 2] & 255, r[p + 3] & 255});
+                    p += 4;
+                }
+            }
+        } catch (RuntimeException e) {
+            out.clear();
+        }
+        return out;
+    }
+
     // ------------------------------------------------------------------ attack paths + script (read AND write)
 
     /** Max waypoints per group: the game keeps them in byte[3][10] (count at [8]), so only 4 points fit. */

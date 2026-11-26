@@ -86,6 +86,7 @@ public class MapView extends View {
         ArrayList<int[]> objs = new ArrayList<int[]>();
         ArrayList<int[]> blds = new ArrayList<int[]>();
         byte[] rest;
+        boolean[] forced;
     }
     private final ArrayList<Snap> undo = new ArrayList<Snap>();
     private final ArrayList<Snap> redo = new ArrayList<Snap>();
@@ -173,6 +174,7 @@ public class MapView extends View {
         for (int[] o : map.objects) s.objs.add(o.clone());
         for (int[] b : map.buildings) s.blds.add(b.clone());
         s.rest = map.rest.clone();
+        s.forced = map.forced == null ? null : map.forced.clone();
         return s;
     }
 
@@ -183,6 +185,7 @@ public class MapView extends View {
         map.buildings.clear();
         map.buildings.addAll(s.blds);
         map.rest = s.rest.clone();
+        map.forced = s.forced == null ? null : s.forced.clone();
         selected = -1;
         moving = -1;
         reload();
@@ -213,6 +216,30 @@ public class MapView extends View {
     /** Drops the newest undo snapshot (a change that was refused after checkpoint()). */
     public void discardCheckpoint() {
         if (!undo.isEmpty()) undo.remove(undo.size() - 1);
+    }
+
+    /** Takes over the content of a generated copy of the map, as one undoable step. */
+    public void applyGenerated(AowMap r) {
+        if (map == null) return;
+        checkpoint();
+        Snap s = new Snap();
+        s.tiles = r.tiles;
+        s.objs.addAll(r.objects);
+        s.blds.addAll(r.buildings);
+        s.rest = r.rest;
+        s.forced = r.forced;
+        restore(s);
+    }
+
+    /** The map cells currently on screen as {x, y, w, h}. */
+    public int[] visibleCells() {
+        if (map == null) return new int[]{0, 0, 1, 1};
+        float cw = cell, chh = cell * ASPECT;
+        int x0 = Math.max(0, (int) Math.ceil(-offX / cw - 0.5f));
+        int y0 = Math.max(0, (int) Math.ceil(-offY / chh - 0.5f));
+        int x1 = Math.min(map.width, (int) Math.floor((getWidth() - offX) / cw + 0.5f));
+        int y1 = Math.min(map.height, (int) Math.floor((getHeight() - offY) / chh + 0.5f));
+        return new int[]{x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)};
     }
 
     /** Zooms and centres so the whole map is visible. */

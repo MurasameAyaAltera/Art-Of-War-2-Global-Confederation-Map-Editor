@@ -37,6 +37,8 @@ public class AowMap {
     public byte[] rest = new byte[0];
     /** False when the building block could not be located (building features are then disabled). */
     public boolean structured = true;
+    /** Cells whose walkable bit must be recomputed even if the tile id happens to match (regenerated terrain). */
+    public boolean[] forced;
     private byte[] raw;                       // original bytes, returned untouched while the map is unmodified
     /** Terrain and objects as they were when the map was read; used to find which cells the user changed. */
     private int[] baseTiles;
@@ -363,7 +365,7 @@ public class AowMap {
         int changed = 0;
         for (int i = 0; i < tiles.length; i++) {
             int x = i % width, y = i / width;
-            boolean untouched = tiles[i] == baseTiles[i] && was[i] == now[i];
+            boolean untouched = tiles[i] == baseTiles[i] && was[i] == now[i] && (forced == null || !forced[i]);
             // untouched cells go back to their original (possibly hand-tuned) bit, so reverting an edit is exact
             boolean want = untouched ? bitAt(baseFog, x, y) != 0 : (now[i] || p.tileBlocked(tileset, tiles[i]));
             if (isBlocked(x, y) != want) { setBlocked(x, y, want); changed++; }
@@ -421,6 +423,7 @@ public class AowMap {
         for (int[] b : buildings) m.buildings.add(b.clone());
         m.rest = rest.clone();
         m.structured = structured;
+        m.forced = forced == null ? null : forced.clone();
         if (baseTiles != null) {
             m.baseTiles = baseTiles.clone();
             m.baseFog = baseFog.clone();

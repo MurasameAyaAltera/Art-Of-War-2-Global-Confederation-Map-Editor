@@ -12,6 +12,11 @@ import android.graphics.Rect;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.CompoundButton;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.SeekBar;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
@@ -24,12 +29,14 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 import java.util.TreeSet;
 
 import aowtool.AowMap;
 import aowtool.JarProject;
 import aowtool.MapScript;
 import aowtool.Passability;
+import aowtool.RandomGen;
 
 public class EditorActivity extends Activity implements MapView.Listener {
     private JarProject.Entry entry;
@@ -51,6 +58,9 @@ public class EditorActivity extends Activity implements MapView.Listener {
     private Button btnPalette;
     private ArtCache art;
     private int tileset;
+    /** Last used random-generator settings (kept while the app runs). */
+    private static RandomGen.Options genLast;
+    private static boolean genVisibleOnly = false;
 
     private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
 
@@ -155,6 +165,7 @@ public class EditorActivity extends Activity implements MapView.Listener {
             }
         });
         btnPalette.setEnabled(art != null);
+        addBtn(bottom2, "Acak", new View.OnClickListener() { public void onClick(View v) { randomDialog(); } });
         addBtn(bottom2, "Ekspor map", new View.OnClickListener() { public void onClick(View v) { exportMap(); } });
         addBtn(bottom2, "Selesai", new View.OnClickListener() { public void onClick(View v) { finish(); } });
         root.addView(bottom2);
@@ -265,7 +276,7 @@ public class EditorActivity extends Activity implements MapView.Listener {
             case MapView.BLD_EDIT: t = "Ketuk bangunan untuk mengubah tipe, posisi, atau grup AI."; break;
             case MapView.FILL: t = "Isi (ember): pilih tile di atas, lalu ketuk sel. Semua sel terrain yang menyambung dengan jenis sama ikut terisi."; break;
             case MapView.ERASE: t = "Hapus: ketuk sel untuk menghapus bangunan di sana, atau objek bila tidak ada bangunan."; break;
-            case MapView.PATH: t = "Jalur serang: pilih grup AI, lalu ketuk sel untuk menambah titik (maks " + AowMap.MAX_PATH_POINTS + " per grup). Ketuk titik yang ada untuk menghapusnya."; break;
+            case MapView.PATH: t = "Jalur serang (titik kumpul unit baru dari Barak/Pabrik musuh): pilih grup AI, lalu ketuk sel untuk menambah titik (maks " + AowMap.MAX_PATH_POINTS + " per grup). Ketuk titik yang ada untuk menghapusnya."; break;
             case MapView.SCRIPT: t = "Skrip: ketuk sel kosong untuk menambah event di sana, ketuk penanda untuk mengubahnya. Skrip jalan berurutan."; break;
             default: t = "Ketuk sel untuk mengambil tile-nya."; break;
         }
@@ -630,12 +641,17 @@ public class EditorActivity extends Activity implements MapView.Listener {
         startActivityForResult(i, REQ_EXPORT);
     }
 
-    private byte[] mapBytes() {
+    /** The game's walkability tables from the opened jar, or null. */
+    private static Passability passability() {
         JarProject p = Session.project;
         byte[] d0 = p == null ? null : p.resource("d0"), ml = p == null ? null : p.resource("ml");
-        if (d0 != null && ml != null) {
-            try { entry.map.syncPassability(new Passability(d0, ml)); } catch (IOException ex) { /* keep the bits as they are */ }
-        }
+        if (d0 == null || ml == null) return null;
+        try { return new Passability(d0, ml); } catch (IOException ex) { return null; }
+    }
+
+    private byte[] mapBytes() {
+        Passability pass = passability();
+        if (pass != null) entry.map.syncPassability(pass);
         return entry.map.toBytes();
     }
 
@@ -664,6 +680,196 @@ public class EditorActivity extends Activity implements MapView.Listener {
                 }
                 final String m = msg;
                 runOnUiThread(new Runnable() { public void run() { toast(m); } });
+            }
+        }).start();
+    }
+
+    // ------------------------------------------------------------------ random generator
+
+    private CheckBox check(LinearLayout parent, String label, boolean on) {
+        CheckBox c = new CheckBox(this);
+        c.setText(label);
+        c.setChecked(on);
+        parent.addView(c);
+        return c;
+    }
+
+    /** A labelled slider min..max; read it back with value(bar, min). */
+    private SeekBar slider(LinearLayout parent, final String label, final String unit, final int min, int max, int value) {
+        final TextView tv = new TextView(this);
+        SeekBar bar = new SeekBar(this);
+        bar.setMax(max - min);
+        bar.setProgress(Math.max(min, Math.min(max, value)) - min);
+        tv.setText(label + ": " + (bar.getProgress() + min) + unit);
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar s, int progress, boolean fromUser) {
+                tv.setText(label + ": " + (progress + min) + unit);
+            }
+            public void onStartTrackingTouch(SeekBar s) { }
+            public void onStopTrackingTouch(SeekBar s) { }
+        });
+        parent.addView(tv);
+        parent.addView(bar);
+        return bar;
+    }
+
+    private static int value(SeekBar bar, int min) { return bar.getProgress() + min; }
+
+    private RadioButton[] choices(LinearLayout parent, String[] labels, int selected) {
+        RadioGroup group = new RadioGroup(this);
+        group.setOrientation(LinearLayout.HORIZONTAL);
+        RadioButton[] out = new RadioButton[labels.length];
+        for (int i = 0; i < labels.length; i++) {
+            out[i] = new RadioButton(this);
+            out[i].setId(View.generateViewId());
+            out[i].setText(labels[i]);
+            group.addView(out[i]);
+        }
+        group.check(out[selected].getId());
+        parent.addView(group);
+        return out;
+    }
+
+    /** An indented block of settings that is only visible while its check box is on. */
+    private LinearLayout section(LinearLayout parent, CheckBox owner) {
+        final LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), 0, 0, dp(6));
+        box.setVisibility(owner.isChecked() ? View.VISIBLE : View.GONE);
+        owner.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(CompoundButton b, boolean on) { box.setVisibility(on ? View.VISIBLE : View.GONE); }
+        });
+        parent.addView(box);
+        return box;
+    }
+
+    private void randomDialog() {
+        final Passability pass = passability();
+        if (pass == null) { toast("JAR ini tidak punya data d0/ml, fitur acak tidak bisa dipakai"); return; }
+        if (!entry.map.structured) { toast("Format peta ini tidak dikenali"); return; }
+        final int[] visible = view.visibleCells();
+        RandomGen.Options last = genLast;
+        if (last == null) {
+            last = new RandomGen.Options();
+            last.objects = true;
+            int enemy = entry.map.countOwner(1);
+            if (enemy > 0) last.buildingCount = enemy;
+        }
+
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(16), dp(8), dp(16), 0);
+        TextView hint = new TextView(this);
+        hint.setText("Centang yang mau diacak. Titik spawn unit dan area yang tadinya tersambung dijaga tetap bisa dilewati. "
+                + "Hasilnya bisa dibatalkan dengan Undo.");
+        hint.setTextSize(12);
+        form.addView(hint);
+
+        final CheckBox cTerrain = check(form, "Terrain (rumput, tanah, air)", last.terrain);
+        LinearLayout s1 = section(form, cTerrain);
+        final SeekBar sWater = slider(s1, "Air", "%", 0, 40, last.water);
+        final SeekBar sDirt = slider(s1, "Tanah", "%", 0, 40, last.dirt);
+
+        final CheckBox cObjects = check(form, "Objek (hutan, gunung, pohon)", last.objects);
+        LinearLayout s2 = section(form, cObjects);
+        final SeekBar sForest = slider(s2, "Hutan", "%", 0, 40, last.forest);
+        final SeekBar sRock = slider(s2, "Gunung / batu", "%", 0, 20, last.rock);
+        final CheckBox cReplaceObj = check(s2, "Hapus objek lama dulu", last.replaceObjects);
+
+        final CheckBox cBuildings = check(form, "Bangunan", last.buildings);
+        LinearLayout s3 = section(form, cBuildings);
+        final RadioButton[] side = choices(s3, new String[]{"Pemain", "Musuh"}, last.side);
+        final SeekBar sCount = slider(s3, "Jumlah", "", 1, AowMap.MAX_PER_OWNER, last.buildingCount);
+        final CheckBox cReplaceBld = check(s3, "Ganti bangunan lama pihak ini (tembok tetap)", last.replaceBuildings);
+        final CheckBox cVisible = check(s3, "Hanya di area yang terlihat di layar (x " + visible[0] + "-"
+                + (visible[0] + visible[2] - 1) + ", y " + visible[1] + "-" + (visible[1] + visible[3] - 1) + ")", genVisibleOnly);
+
+        final CheckBox cPaths = check(form, "Jalur serang musuh", last.paths);
+        LinearLayout s4 = section(form, cPaths);
+        TextView pathHint = new TextView(this);
+        pathHint.setText("Titik ini tempat berkumpul unit baru dari Barak/Pabrik musuh. Hanya grup yang punya Barak/Pabrik yang diubah.");
+        pathHint.setTextSize(12);
+        s4.addView(pathHint);
+        final SeekBar sPoints = slider(s4, "Titik per grup", "", 1, AowMap.MAX_PATH_POINTS, last.pathPoints);
+        final RadioButton[] dist = choices(s4, new String[]{"Dekat", "Sedang", "Maju"}, last.pathDistance);
+
+        TextView seedLabel = new TextView(this);
+        seedLabel.setText("Seed (kosongkan = acak baru; isi angka yang sama untuk hasil yang sama)");
+        form.addView(seedLabel);
+        final EditText fSeed = new EditText(this);
+        fSeed.setInputType(InputType.TYPE_CLASS_NUMBER);
+        form.addView(fSeed);
+
+        ScrollView sv = new ScrollView(this);
+        sv.addView(form);
+        new AlertDialog.Builder(this)
+                .setTitle("Acak peta")
+                .setView(sv)
+                .setPositiveButton("Acak", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        RandomGen.Options o = new RandomGen.Options();
+                        o.terrain = cTerrain.isChecked();
+                        o.objects = cObjects.isChecked();
+                        o.buildings = cBuildings.isChecked();
+                        o.paths = cPaths.isChecked();
+                        o.water = value(sWater, 0);
+                        o.dirt = value(sDirt, 0);
+                        o.forest = value(sForest, 0);
+                        o.rock = value(sRock, 0);
+                        o.replaceObjects = cReplaceObj.isChecked();
+                        o.side = side[0].isChecked() ? 0 : 1;
+                        o.buildingCount = value(sCount, 1);
+                        o.replaceBuildings = cReplaceBld.isChecked();
+                        o.pathPoints = value(sPoints, 1);
+                        o.pathDistance = dist[0].isChecked() ? 0 : dist[2].isChecked() ? 2 : 1;
+                        genVisibleOnly = cVisible.isChecked();
+                        if (o.buildings && genVisibleOnly) {
+                            if (visible[2] < 5 || visible[3] < 5) { toast("Area yang terlihat terlalu kecil, perkecil zoom dulu"); return; }
+                            o.area = visible;
+                        }
+                        String s = fSeed.getText().toString().trim();
+                        o.seed = new Random().nextInt(1000000);
+                        if (s.length() > 0) {
+                            try { o.seed = Long.parseLong(s); } catch (NumberFormatException e) { toast("Seed terlalu besar"); return; }
+                        }
+                        genLast = o;
+                        runRandom(o, pass);
+                    }
+                })
+                .setNegativeButton("Batal", null)
+                .show();
+    }
+
+    /** Generates on a copy off the UI thread, then applies the result as one undo step. */
+    private void runRandom(final RandomGen.Options o, final Passability pass) {
+        final AowMap work = entry.map.copy();
+        final AlertDialog busy = new AlertDialog.Builder(this).setMessage("Mengacak peta...").setCancelable(false).show();
+        new Thread(new Runnable() {
+            public void run() {
+                String report = null, error = null;
+                try {
+                    report = RandomGen.generate(work, pass, o);
+                } catch (IllegalStateException e) {
+                    error = e.getMessage();
+                } catch (RuntimeException e) {
+                    error = e.toString();
+                }
+                final String ok = report, bad = error;
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        if (isFinishing() || isDestroyed()) return;
+                        busy.dismiss();
+                        if (bad != null) {
+                            info.setText("Gagal mengacak: " + bad);
+                            toast("Gagal mengacak: " + bad);
+                            return;
+                        }
+                        view.applyGenerated(work);
+                        updateTitle();
+                        refreshToolLabels();
+                        info.setText(ok + "\nSeed " + o.seed + ". Tekan Undo untuk membatalkan, atau Acak lagi untuk hasil lain.");
+                    }
+                });
             }
         }).start();
     }

@@ -62,3 +62,13 @@ Edit peta Art of War 2 - Global Confederation (.jar), tambah map baru, dan patch
 - Judul editor menampilkan hasil uji **round-trip** peta: byte-identik, isi sama (byte beda), atau berbeda. Di 15 peta asli hanya Encircled (map2) yang menghasilkan byte berbeda (isi sama; game membacanya sama).
 - Undo/redo kini ikut mencakup jalur serang dan skrip.
 - Tes desktop baru: `tools/test/ScriptEditTest.java` (15 peta asli) dan `tools/test/JarEditE2E.java` (edit lalu tulis JAR asli).
+
+## Acak peta (v1.3)
+Tombol **Acak** (baris bawah). Centang yang mau diacak, boleh satu atau semuanya. Satu kali acak = satu langkah Undo. Seed yang sama pada map dan pengaturan yang sama memberi hasil yang sama.
+- **Terrain**: rumput muda/tua, tanah, dan air dengan tile peralihan asli (tileset 0 dan 1). Area bangunan, spawn unit, dan zona tembok diratakan; zona basis AI dijaga tanpa air. Tanpa centang Objek, objek lama yang jatuh di air atau menimpa bangunan dihapus.
+- **Objek**: kumpulan hutan, gunung/batu, dan pohon lepas. "Hapus objek lama" juga mengubah tile dasar hutan/gunung lama menjadi rumput.
+- **Bangunan**: pihak, jumlah (maks 50 per pihak), ganti atau tambah. Tanpa pilihan area, bangunan ditaruh di sekitar basis lama; turret cenderung di depan. Barak/Pabrik diberi jalan keluar. Tembok dan zona tembok tidak diubah. Zona AI tidak dipindah, jadi basis yang ditaruh jauh dari basis lama bisa berperilaku lain.
+- **Jalur serang**: mengisi daftar `iJ` (1-4 titik per grup). Menurut kode game (`h.J()`), daftar ini adalah **titik kumpul** unit dari Barak/Pabrik musuh grup tersebut, dibagikan bergiliran per bangunan; bukan rute yang dilalui berurutan.
+- Titik yang tadinya tersambung lewat darat (spawn unit, bangunan) dijaga tetap tersambung. Skrip spawn, zona AI, gelombang, dan briefing tidak diubah.
+- Tes desktop: `tools/test/RandomGenTest <folder hasil ekstrak jar> [jumlah seed]`.
+
