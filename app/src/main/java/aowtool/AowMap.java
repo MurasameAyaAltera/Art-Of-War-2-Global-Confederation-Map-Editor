@@ -38,6 +38,10 @@ public class AowMap {
     /** False when the building block could not be located (building features are then disabled). */
     public boolean structured = true;
     private byte[] raw;                       // original bytes, returned untouched while the map is unmodified
+    /** Terrain and objects as they were when the map was read; used to find which cells the user changed. */
+    private int[] baseTiles;
+    private List<int[]> baseObjects;
+    private byte[] baseFog;
 
     public static AowMap parse(byte[] file) {
         int len = u16(file, 0);
@@ -82,6 +86,10 @@ public class AowMap {
             System.arraycopy(file, p, m.rest, 0, m.rest.length);
         }
         m.raw = file.clone();
+        m.baseTiles = m.tiles.clone();
+        m.baseFog = m.fog.clone();
+        m.baseObjects = new ArrayList<int[]>();
+        for (int[] o : m.objects) m.baseObjects.add(o.clone());
         return m;
     }
 
@@ -113,8 +121,43 @@ public class AowMap {
         return (kind - WALL_FIRST) / 10;
     }
 
-    /** Short description of a kind, e.g. "Bangunan tipe 7" or "Tembok tipe 27". */
-    public static String kindName(int kind) { return (isWall(kind) ? "Tembok tipe " : "Bangunan tipe ") + kind; }
+    /** Hit points of building kinds 0..14, read from the game's resource "a" (offset 3091). */
+    private static final int[] HP = {250, 120, 120, 150, 100, 250, 120, 160, 250, 120, 150, 120, 120, 180, 160};
+    private static final String[] NAME_ID = {"Pusat Komando", "Generator", "Pusat Infanteri", "Pabrik Kendaraan",
+            "Pusat Teknologi", "Bunker", "Lokator / Radar", "Peluncur Rudal", "Markas", "Pembangkit Listrik", "Barak",
+            "Pabrik", "Laboratorium", "Bunker", "Peluncur Rudal"};
+    /** Russian in-game names; "" where the name was not confirmed. */
+    private static final String[] NAME_RU = {"\u041a\u043e\u043c\u0430\u043d\u0434\u043d\u044b\u0439 \u0446\u0435\u043d\u0442\u0440",
+            "\u0413\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440",
+            "\u041f\u0435\u0445\u043e\u0442\u043d\u044b\u0439 \u0446\u0435\u043d\u0442\u0440",
+            "\u0417\u0430\u0432\u043e\u0434 \u0442\u0435\u0445\u043d\u0438\u043a\u0438",
+            "\u0426\u0435\u043d\u0442\u0440 \u0442\u0435\u0445\u043d\u043e\u043b\u043e\u0433\u0438\u0439",
+            "\u0411\u0443\u043d\u043a\u0435\u0440", "\u041b\u043e\u043a\u0430\u0442\u043e\u0440",
+            "\u0420\u0430\u043a\u0435\u0442\u043d\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430",
+            "\u0428\u0442\u0430\u0431",
+            "\u042d\u043b\u0435\u043a\u0442\u0440\u043e\u0441\u0442\u0430\u043d\u0446\u0438\u044f",
+            "\u041a\u0430\u0437\u0430\u0440\u043c\u0430", "\u0417\u0430\u0432\u043e\u0434", "", "", ""};
+
+    /** Indonesian name of a building kind; "Tembok" for walls. */
+    public static String buildingName(int kind) {
+        if (kind >= 0 && kind < NAME_ID.length) return NAME_ID[kind];
+        return isWall(kind) ? "Tembok" : "Tipe " + kind;
+    }
+
+    /** Russian in-game name, or "" when unknown / not a building. */
+    public static String buildingNameRu(int kind) {
+        return kind >= 0 && kind < NAME_RU.length ? NAME_RU[kind] : "";
+    }
+
+    /** Hit points of a building kind, or -1 for walls / unknown kinds. */
+    public static int buildingHp(int kind) { return kind >= 0 && kind < HP.length ? HP[kind] : -1; }
+
+    /** Short description of a kind, e.g. "Peluncur Rudal (tipe 7)" or "Tembok tipe 27". */
+    public static String kindName(int kind) {
+        if (isWall(kind)) return "Tembok tipe " + kind;
+        if (kind >= 0 && kind < NAME_ID.length) return NAME_ID[kind] + " (tipe " + kind + ")";
+        return "Bangunan tipe " + kind;
+    }
 
     /** Number of real buildings (not walls) of a side; walls do not use the game's 50 slots. */
     public int countOwner(int owner) {
@@ -179,6 +222,65 @@ public class AowMap {
         return buildings.size() - 1;
     }
 
+    /** Wall zones {group, x, y, w, h} stored after the building list (read only), see {@link MapScript#wallRects}. */
+    public List<int[]> wallZones() {
+        return MapScript.wallRects(rest);
+    }
+
+    // ------------------------------------------------------------------ attack paths + script (editable)
+
+    public static final int MAX_PATH_POINTS = MapScript.MAX_PATH_POINTS, MAX_EVENTS = MapScript.MAX_EVENTS;
+
+    /** True when the attack paths and script of this map can be edited. */
+    public boolean scriptEditable() { return structured && MapScript.editable(rest); }
+
+    /** Attack path waypoints {x,y} of AI group 0..2 (a fresh list; edit it and pass it to setAttackPath). */
+    public List<int[]> attackPath(int group) {
+        return MapScript.attackPaths(rest).get(Math.max(0, Math.min(2, group)));
+    }
+
+    /** Replaces the attack path of a group. Returns null when done, otherwise the reason it was refused. */
+    public String setAttackPath(int group, List<int[]> pts) {
+        if (!scriptEditable()) return "Data jalur serang peta ini tidak dikenali";
+        if (group < 0 || group > 2) return "Grup harus 0-2";
+        if (pts.size() > MAX_PATH_POINTS) return "Maksimal " + MAX_PATH_POINTS + " titik per grup";
+        for (int[] q : pts) if (q[0] < 0 || q[1] < 0 || q[0] >= width || q[1] >= height) return "Titik di luar peta";
+        List<List<int[]>> all = MapScript.attackPaths(rest);
+        all.set(group, new ArrayList<int[]>(pts));
+        rest = MapScript.withAttackPaths(rest, all);
+        return null;
+    }
+
+    /** Script events {op,x,y,a,b,group} in execution order (a fresh list). */
+    public List<int[]> script() { return MapScript.events(rest); }
+
+    /** Replaces the whole script. Returns null when done, otherwise the reason it was refused. */
+    public String setScript(List<int[]> ev) {
+        if (!scriptEditable()) return "Skrip peta ini tidak dikenali";
+        if (ev.size() > MAX_EVENTS) return "Maksimal " + MAX_EVENTS + " event skrip";
+        for (int[] e : ev) {
+            if (e.length != 6) return "Event tidak valid";
+            for (int v : e) if (v < 0 || v > 255) return "Nilai event harus 0-255";
+        }
+        rest = MapScript.withEvents(rest, ev);
+        return null;
+    }
+
+    /**
+     * Result of reading this map and writing it again: 0 = exactly the same bytes, 1 = different bytes but the same
+     * content (the game reads both the same; e.g. an unusual run split in the original), 2 = content differs.
+     */
+    public int roundTrip() {
+        if (raw == null) return 2;
+        try {
+            byte[] o = parse(raw).encode();
+            if (java.util.Arrays.equals(o, raw)) return 0;
+            return parse(raw).sameContent(parse(o)) ? 1 : 2;
+        } catch (RuntimeException e) {
+            return 2;
+        }
+    }
+
     /** Script-driven unit spawns (read only); empty if the script could not be read. */
     public List<int[]> spawns() {
         return MapScript.spawns(rest);
@@ -202,11 +304,71 @@ public class AowMap {
     /** True when nothing differs from the bytes this map was parsed from. */
     public boolean isUnmodified() {
         if (raw == null) return false;
-        AowMap o = parse(raw);
+        return sameContent(parse(raw));
+    }
+
+    private boolean sameContent(AowMap o) {
         return o.base == base && o.width == width && o.height == height && o.tileset == tileset
                 && java.util.Arrays.equals(o.tiles, tiles) && java.util.Arrays.equals(o.rest, rest)
                 && java.util.Arrays.equals(o.fog, fog) && sameBuildings(o.buildings, buildings)
                 && sameObjects(o.objects, objects);
+    }
+
+    // ------------------------------------------------------------------ passability
+
+    private int bitAt(byte[] f, int x, int y) {
+        int per = (width - 1) / 32 + 1;
+        int word = (y * per + x / 32) * 4;
+        int v = ((f[word] & 255) << 24) | ((f[word + 1] & 255) << 16) | ((f[word + 2] & 255) << 8) | (f[word + 3] & 255);
+        return (v >>> (31 - (x % 32))) & 1;
+    }
+
+    /** Bit 1 = blocked for ground units (see {@link Passability}). */
+    public boolean isBlocked(int x, int y) {
+        if (fog.length == 0 || x < 0 || y < 0 || x >= width || y >= height) return false;
+        return bitAt(fog, x, y) != 0;
+    }
+
+    public void setBlocked(int x, int y, boolean b) {
+        if (fog.length == 0 || x < 0 || y < 0 || x >= width || y >= height) return;
+        int per = (width - 1) / 32 + 1;
+        int word = (y * per + x / 32) * 4;
+        int bit = 31 - (x % 32);
+        int v = ((fog[word] & 255) << 24) | ((fog[word + 1] & 255) << 16) | ((fog[word + 2] & 255) << 8) | (fog[word + 3] & 255);
+        v = b ? (v | (1 << bit)) : (v & ~(1 << bit));
+        fog[word] = (byte) (v >>> 24); fog[word + 1] = (byte) (v >>> 16); fog[word + 2] = (byte) (v >>> 8); fog[word + 3] = (byte) v;
+    }
+
+    private boolean[] cover(List<int[]> objs, Passability p) {
+        boolean[] c = new boolean[width * height];
+        for (int[] o : objs) {
+            int[] f = p.footprint(tileset, o[0]);
+            for (int yy = o[2]; yy < o[2] + f[1] && yy < height; yy++)
+                for (int xx = o[1]; xx < o[1] + f[0] && xx < width; xx++)
+                    if (xx >= 0 && yy >= 0) c[yy * width + xx] = true;
+        }
+        return c;
+    }
+
+    /**
+     * Brings the walkability bits in line with what the user changed: for every cell whose tile changed, or whose
+     * object coverage changed, since the map was read, bit = water/cliff tile OR under an object footprint.
+     * Cells the user did not touch keep their original bits (the stock maps have hand-tuned blocks).
+     *
+     * @return number of cells whose bit was changed
+     */
+    public int syncPassability(Passability p) {
+        if (!structured || fog.length == 0 || baseTiles == null || p == null) return 0;
+        boolean[] was = cover(baseObjects, p), now = cover(objects, p);
+        int changed = 0;
+        for (int i = 0; i < tiles.length; i++) {
+            int x = i % width, y = i / width;
+            boolean untouched = tiles[i] == baseTiles[i] && was[i] == now[i];
+            // untouched cells go back to their original (possibly hand-tuned) bit, so reverting an edit is exact
+            boolean want = untouched ? bitAt(baseFog, x, y) != 0 : (now[i] || p.tileBlocked(tileset, tiles[i]));
+            if (isBlocked(x, y) != want) { setBlocked(x, y, want); changed++; }
+        }
+        return changed;
     }
 
     public byte[] toBytes() {
@@ -259,6 +421,12 @@ public class AowMap {
         for (int[] b : buildings) m.buildings.add(b.clone());
         m.rest = rest.clone();
         m.structured = structured;
+        if (baseTiles != null) {
+            m.baseTiles = baseTiles.clone();
+            m.baseFog = baseFog.clone();
+            m.baseObjects = new ArrayList<int[]>();
+            for (int[] o : baseObjects) m.baseObjects.add(o.clone());
+        }
         return m;
     }
 

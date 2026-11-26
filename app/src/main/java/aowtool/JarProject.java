@@ -89,8 +89,14 @@ public class JarProject {
         DataOutputStream d = new DataOutputStream(ib);
         d.writeInt(version + 1);
         d.writeShort(maps.size());
+        Passability pass = null;
+        try {
+            byte[] d0 = files.get("d0"), ml = files.get("ml");
+            if (d0 != null && ml != null) pass = new Passability(d0, ml);
+        } catch (IOException ex) { /* leave the walkability bits as they are */ }
         for (Entry e : maps) {
             d.writeShort(e.slot); d.writeShort(e.id); d.writeUTF(e.name); d.writeUTF(e.file);
+            e.map.syncPassability(pass);   // water -> land (and objects added/removed) must also change the blocked bits
             o.put(e.file, e.map.toBytes());
         }
         o.put("maps.idx", ib.toByteArray());

@@ -2,15 +2,9 @@
 
 Edit peta Art of War 2 - Global Confederation (.jar), tambah map baru, dan patch JAR agar map baru terbaca.
 
-## Build lewat GitHub (tanpa Android Studio)
-1. Buat repo baru di GitHub, upload SELURUH isi folder ini (termasuk folder `.github`).
-2. Buka tab **Actions** > workflow **Build APK** (jalan otomatis saat push, atau klik *Run workflow*).
-3. Setelah hijau, buka run-nya > bagian **Artifacts** > unduh `AoW2-MapEditor-apk` (zip berisi `app-debug.apk`).
-4. Ekstrak, pasang APK di HP (izinkan install dari sumber tidak dikenal).
-
 ## Pemakaian
 1. **Buka JAR** -> pilih file game.
-2. Ketuk map untuk mengedit. Baris 1: Geser / Kuas / Objek+ / Objek- / Pipet. Baris 2: Bangun+ / Bangun- / Pindah / Edit / Unit. Cubit untuk zoom.
+2. Ketuk map untuk mengedit. Baris 1: Geser / Kuas / Objek+ / Objek- / Pipet. Baris 2: Bangun+ / Bangun- / Pindah / Edit / Unit. Baris 3: Isi (ember) / Hapus / Jalur serang / Skrip. Cubit untuk zoom.
 3. **Map baru** menyalin map yang ada lalu bisa diedit.
 4. **Simpan JAR** -> jalankan JAR hasilnya di J2ME Loader.
 
@@ -46,3 +40,25 @@ Edit peta Art of War 2 - Global Confederation (.jar), tambah map baru, dan patch
 - Gambar tile/objek diambil dari JAR yang dibuka (tidak ada aset game di dalam APK). Jika JAR tidak punya `i0`/`d0`/`ml` atau gagal didekode, editor kembali memakai warna per ID.
 - Map kampanye tidak didukung.
 - `tools/` berisi pengujian desktop (opsional): `BuildingTest` (round-trip 15 map + API bangunan), `JarRoundTrip` (edit bangunan di JAR asli), `KindSheet` (contact sheet sprite).
+
+## Bisa dilewati atau tidak (mask blokir)
+- Dapat dilewati unit atau tidak ditentukan **bit per sel** di file peta (blok yang dulu disebut "fog"), bukan ID tile. 1 = terblokir, 0 = bebas.
+- Saat **Simpan JAR**, editor menyamakan bit itu untuk sel yang kamu ubah: tile air/tebing atau sel di bawah objek = terblokir, selain itu bebas. Sel yang tidak kamu sentuh tidak diubah. Mengembalikan edit juga mengembalikan bit aslinya.
+- Aturan ini cocok dengan sekitar 96% sel di 15 peta asli; sisanya blok buatan tangan.
+
+## Zona tembok
+- Tembok bawaan game (mis. 5x2 di bawah dua bunker musuh peta Ford) **tidak** ada di daftar bangunan. Tembok itu disimpan sebagai persegi "zona tembok" (x, y, lebar, tinggi) di data setelah daftar bangunan, dan game mengisinya dengan tembok musuh pada sel yang masih kosong.
+- Editor sekarang membaca zona itu dan menggambar tembok di tiap selnya (kotak oranye saat mode Bangun/Edit). Mengetuk sel di mode Geser menampilkan info zona. Zona hanya dibaca, tidak bisa diubah; tembok yang kamu taruh lewat Bangun+ tetap tersimpan di daftar bangunan seperti biasa.
+
+
+## Alat baru (v1.2)
+- **Isi (ember)**: pilih tile di palet, ketuk sel; semua sel terrain yang menyambung (4 arah) dengan jenis yang sama ikut terisi. Varian acak dalam satu grup (rumput, tanah, air) dianggap satu jenis.
+- **Hapus**: satu alat untuk menghapus bangunan di sel yang diketuk, atau objek yang jejaknya menutupi sel itu bila tidak ada bangunan. Zona tembok bawaan tetap tidak bisa dihapus.
+- **Jalur serang**: pilih grup AI 0-2, ketuk sel untuk menambah titik jalur serang, ketuk titik yang ada untuk menghapusnya. Disimpan di daftar `iJ` peta. **Maksimal 4 titik per grup**: game menyimpannya di `byte[3][10]` dengan jumlah di indeks 8, jadi titik ke-5 akan menimpa jumlahnya. Garis tiap grup digambar berwarna (merah, ungu, oranye) dengan nomor titik; juga tampil saat tombol **Unit** menyala.
+- **Skrip**: ketuk sel kosong untuk menambah event, ketuk penanda untuk mengubahnya; **Daftar skrip** menampilkan semua event. Event = `{op, x, y, a, jeda, grup}`, **maksimal 100**, dijalankan **berurutan** (tiap event menunggu `jeda x 10` tik setelah event sebelumnya), jadi kolom *Urutan* menentukan kapan event berjalan. Op yang artinya sudah dibaca dari kode game diberi nama: 24 (kamera awal), 27 (spawn unit), 22/23 (label dan ulangan loop), 20/21 (perintah AI per grup). Op lain (25, 26, 28-39) hanya tampil bernomor; artinya belum dipastikan, jadi ubah dengan hati-hati.
+- **Bangunan**: palet dan info menampilkan nama (Indonesia, plus nama Rusia di game bila diketahui) dan HP tiap tipe 0-14. HP dibaca dari resource `a` di JAR game. Nama tipe 12-14 dan nama Rusianya belum terkonfirmasi di game (tipe 14 dinamai Peluncur Rudal karena ukuran dan HP-nya sama dengan tipe 7).
+- **Objek+**: tombol **ID 0-95...** untuk memilih tipe objek mentah.
+- **Redo**, **Pas** (muat seluruh peta), dan **Ekspor map** (menyimpan file map mentah, sama dengan isinya di JAR).
+- Judul editor menampilkan hasil uji **round-trip** peta: byte-identik, isi sama (byte beda), atau berbeda. Di 15 peta asli hanya Encircled (map2) yang menghasilkan byte berbeda (isi sama; game membacanya sama).
+- Undo/redo kini ikut mencakup jalur serang dan skrip.
+- Tes desktop baru: `tools/test/ScriptEditTest.java` (15 peta asli) dan `tools/test/JarEditE2E.java` (edit lalu tulis JAR asli).

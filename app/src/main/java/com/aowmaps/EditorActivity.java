@@ -3,6 +3,8 @@ package com.aowmaps;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.content.Intent;
+import android.net.Uri;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -13,22 +15,33 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.text.InputType;
 
+import java.io.IOException;
+import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.TreeSet;
 
 import aowtool.AowMap;
 import aowtool.JarProject;
+import aowtool.MapScript;
+import aowtool.Passability;
 
 public class EditorActivity extends Activity implements MapView.Listener {
     private JarProject.Entry entry;
     private MapView view;
     private TextView info, title;
     private LinearLayout palette;
-    private final Button[] modeBtns = new Button[9];
+    private static final int REQ_EXPORT = 11;
+    private static final int[] PATH_COLORS = {0xFFE53935, 0xFF8E24AA, 0xFFFB8C00};
+    private final Button[] modeBtns = new Button[MapView.MODE_COUNT];
+    private final Button[] pathBtns = new Button[3];
+    private Button btnScriptList;
+    private int roundTrip = 2;
     private Button btnUnits;
     private int mode = MapView.PAN;
     private int tile = 0, objType = 0, bldKind = 0;
@@ -57,6 +70,7 @@ public class EditorActivity extends Activity implements MapView.Listener {
             for (int[] o : e.map.objects) objs.add(o[0]);
         }
         tileset = m.tileset;
+        roundTrip = m.roundTrip();
         art = Session.art();
         tileIds = toArray(canonTiles(tiles));
         objIds = toArray(objs);
@@ -100,6 +114,13 @@ public class EditorActivity extends Activity implements MapView.Listener {
         modes2.addView(btnUnits, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         root.addView(modes2);
 
+        LinearLayout modes3 = new LinearLayout(this);
+        addMode(modes3, "Isi (ember)", MapView.FILL);
+        addMode(modes3, "Hapus", MapView.ERASE);
+        addMode(modes3, "Jalur serang", MapView.PATH);
+        addMode(modes3, "Skrip", MapView.SCRIPT);
+        root.addView(modes3);
+
         HorizontalScrollView hs = new HorizontalScrollView(this);
         palette = new LinearLayout(this);
         hs.addView(palette);
@@ -117,11 +138,16 @@ public class EditorActivity extends Activity implements MapView.Listener {
         root.addView(info);
 
         LinearLayout bottom = new LinearLayout(this);
-        addBtn(bottom, "Undo", new View.OnClickListener() { public void onClick(View v) { view.undo(); } });
+        addBtn(bottom, "Undo", new View.OnClickListener() { public void onClick(View v) { view.undo(); updateTitle(); } });
+        addBtn(bottom, "Redo", new View.OnClickListener() { public void onClick(View v) { view.redo(); updateTitle(); } });
         addBtn(bottom, "Zoom +", new View.OnClickListener() { public void onClick(View v) { view.zoom(1.3f); } });
         addBtn(bottom, "Zoom -", new View.OnClickListener() { public void onClick(View v) { view.zoom(1f / 1.3f); } });
-        addBtn(bottom, "Nama", new View.OnClickListener() { public void onClick(View v) { rename(); } });
-        btnPalette = addBtn(bottom, "Semua", new View.OnClickListener() {
+        addBtn(bottom, "Pas", new View.OnClickListener() { public void onClick(View v) { view.fit(); } });
+        root.addView(bottom);
+
+        LinearLayout bottom2 = new LinearLayout(this);
+        addBtn(bottom2, "Nama", new View.OnClickListener() { public void onClick(View v) { rename(); } });
+        btnPalette = addBtn(bottom2, "Semua", new View.OnClickListener() {
             public void onClick(View v) {
                 showAll = !showAll;
                 btnPalette.setText(showAll ? "Dipakai" : "Semua");
@@ -129,8 +155,9 @@ public class EditorActivity extends Activity implements MapView.Listener {
             }
         });
         btnPalette.setEnabled(art != null);
-        addBtn(bottom, "Selesai", new View.OnClickListener() { public void onClick(View v) { finish(); } });
-        root.addView(bottom);
+        addBtn(bottom2, "Ekspor map", new View.OnClickListener() { public void onClick(View v) { exportMap(); } });
+        addBtn(bottom2, "Selesai", new View.OnClickListener() { public void onClick(View v) { finish(); } });
+        root.addView(bottom2);
 
         setContentView(root);
         updateTitle();
@@ -212,7 +239,9 @@ public class EditorActivity extends Activity implements MapView.Listener {
     private void updateTitle() {
         title.setText(entry.name + "  " + entry.map.width + "x" + entry.map.height
                 + "  tileset " + entry.map.tileset + "  objek " + entry.map.objects.size()
-                + "  bangunan " + entry.map.buildings.size());
+                + "  bangunan " + entry.map.buildings.size()
+                + (roundTrip == 0 ? "  round-trip byte-identik \u2713"
+                        : roundTrip == 1 ? "  round-trip isi sama \u2713 (byte berbeda)" : "  round-trip BERBEDA \u26a0"));
     }
 
     private void setMode(int m) {
@@ -234,6 +263,10 @@ public class EditorActivity extends Activity implements MapView.Listener {
             case MapView.BLD_DEL: t = "Ketuk bangunan untuk menghapusnya."; break;
             case MapView.BLD_MOVE: t = "Sentuh bangunan lalu seret untuk memindahkan (hanya ke posisi yang muat)."; break;
             case MapView.BLD_EDIT: t = "Ketuk bangunan untuk mengubah tipe, posisi, atau grup AI."; break;
+            case MapView.FILL: t = "Isi (ember): pilih tile di atas, lalu ketuk sel. Semua sel terrain yang menyambung dengan jenis sama ikut terisi."; break;
+            case MapView.ERASE: t = "Hapus: ketuk sel untuk menghapus bangunan di sana, atau objek bila tidak ada bangunan."; break;
+            case MapView.PATH: t = "Jalur serang: pilih grup AI, lalu ketuk sel untuk menambah titik (maks " + AowMap.MAX_PATH_POINTS + " per grup). Ketuk titik yang ada untuk menghapusnya."; break;
+            case MapView.SCRIPT: t = "Skrip: ketuk sel kosong untuk menambah event di sana, ketuk penanda untuk mengubahnya. Skrip jalan berurutan."; break;
             default: t = "Ketuk sel untuk mengambil tile-nya."; break;
         }
         info.setText(t);
@@ -262,11 +295,12 @@ public class EditorActivity extends Activity implements MapView.Listener {
         protected void onDraw(Canvas c) {
             int w = getWidth(), h = getHeight();
             c.drawColor(isBld ? (AowMap.owner(id) == 0 ? 0xFF24476B : 0xFF6B2A2A) : isObj ? 0xFF4A5A40 : 0xFF303030);
+            int ah = isBld ? h - dp(24) : h;       // buildings keep the bottom strip for name + HP
             if (spr != null) {
-                float sc = Math.min((w - dp(6)) / (float) spr.w, (h - dp(6)) / (float) spr.h);
+                float sc = Math.min((w - dp(6)) / (float) spr.w, (ah - dp(6)) / (float) spr.h);
                 if (isObj || isBld) sc = Math.min(sc, 2f);
                 int dw = Math.max(1, Math.round(spr.w * sc)), dh = Math.max(1, Math.round(spr.h * sc));
-                r.set((w - dw) / 2, (h - dh) / 2, (w - dw) / 2 + dw, (h - dh) / 2 + dh);
+                r.set((w - dw) / 2, (ah - dh) / 2, (w - dw) / 2 + dw, (ah - dh) / 2 + dh);
                 p.setFilterBitmap(true);
                 c.drawBitmap(spr.bmp, null, r, p);
             } else {
@@ -277,6 +311,12 @@ public class EditorActivity extends Activity implements MapView.Listener {
             p.setShadowLayer(dp(2), 0, 0, Color.BLACK);
             p.setColor(Color.WHITE);
             c.drawText(String.valueOf(id), dp(3), dp(11), p);
+            if (isBld) {
+                p.setTextSize(dp(9));
+                c.drawText(AowMap.buildingName(id), dp(3), h - dp(13), p);
+                int hp = AowMap.buildingHp(id);
+                if (hp > 0) c.drawText("HP " + hp, dp(3), h - dp(3), p);
+            }
             p.clearShadowLayer();
             if (selected) {
                 p.setStyle(Paint.Style.STROKE);
@@ -287,8 +327,25 @@ public class EditorActivity extends Activity implements MapView.Listener {
         }
     }
 
+    private void applyViewSelection() {
+        view.setTile(tile);
+        view.setObjType(objType);
+        view.setBuildingKind(bldKind);
+    }
+
     private void buildPalette() {
         palette.removeAllViews();
+        if (mode == MapView.PATH) { buildPathPalette(); applyViewSelection(); return; }
+        if (mode == MapView.SCRIPT) { buildScriptPalette(); applyViewSelection(); return; }
+        if (mode == MapView.ERASE) { applyViewSelection(); return; }
+        if (mode == MapView.OBJ_ADD) {
+            Button raw = new Button(this);
+            raw.setText("ID 0-95...");
+            raw.setTextSize(11);
+            raw.setAllCaps(false);
+            raw.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { rawObjectDialog(); } });
+            palette.addView(raw, new LinearLayout.LayoutParams(dp(84), dp(48)));
+        }
         final boolean bldMode = mode >= MapView.BLD_ADD && mode <= MapView.BLD_EDIT;
         final boolean objMode = mode == MapView.OBJ_ADD || mode == MapView.OBJ_DEL;
         int[] ids;
@@ -301,7 +358,8 @@ public class EditorActivity extends Activity implements MapView.Listener {
         for (final int id : ids) {
             Thumb t = new Thumb(id, objMode, bldMode, id == sel);
             t.setAlpha(id == sel ? 1f : 0.8f);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(64), dp(48));
+            LinearLayout.LayoutParams lp = bldMode ? new LinearLayout.LayoutParams(dp(104), dp(70))
+                    : new LinearLayout.LayoutParams(dp(64), dp(48));
             lp.setMargins(dp(2), dp(2), dp(2), dp(2));
             t.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
@@ -309,8 +367,12 @@ public class EditorActivity extends Activity implements MapView.Listener {
                         bldKind = id; view.setBuildingKind(id);
                         int[] fp = AowMap.footprint(id);
                         if (mode != MapView.BLD_ADD) setMode(MapView.BLD_ADD);
-                        info.setText(AowMap.kindName(id) + " (" + (AowMap.owner(id) == 0 ? "pemain" : "musuh")
-                                + ", " + fp[0] + "x" + fp[1] + " sel). Ketuk peta untuk menaruh.");
+                        String ru = AowMap.buildingNameRu(id);
+                        int hp = AowMap.buildingHp(id);
+                        info.setText(AowMap.kindName(id) + (ru.length() > 0 ? " / " + ru : "") + " ("
+                                + (AowMap.owner(id) == 0 ? "pemain" : "musuh")
+                                + ", " + fp[0] + "x" + fp[1] + " sel" + (hp > 0 ? ", HP " + hp : "")
+                                + "). Ketuk peta untuk menaruh.");
                     } else if (objMode) {
                         objType = id; view.setObjType(id);
                         if (art != null) {
@@ -319,16 +381,291 @@ public class EditorActivity extends Activity implements MapView.Listener {
                         }
                     } else {
                         tile = id; view.setTile(id);
-                        if (mode != MapView.PAINT) setMode(MapView.PAINT);
+                        if (mode != MapView.PAINT && mode != MapView.FILL) setMode(MapView.PAINT);
                     }
                     buildPalette();
                 }
             });
             palette.addView(t, lp);
         }
-        view.setTile(tile);
-        view.setObjType(objType);
-        view.setBuildingKind(bldKind);
+        applyViewSelection();
+    }
+
+    // ------------------------------------------------------------------ path / script / export
+
+    private void rawObjectDialog() {
+        final EditText et = new EditText(this);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER);
+        et.setText(String.valueOf(objType));
+        et.setSelectAllOnFocus(true);
+        new AlertDialog.Builder(this)
+                .setTitle("Tipe objek mentah (0-95)")
+                .setView(et)
+                .setPositiveButton("Pakai", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        int v = Math.max(0, Math.min(95, num(et, objType)));
+                        objType = v;
+                        view.setObjType(v);
+                        buildPalette();
+                        info.setText("objek " + v + " dipilih. Ketuk peta untuk menaruh.");
+                    }
+                })
+                .setNegativeButton("Batal", null)
+                .show();
+    }
+
+    private void buildPathPalette() {
+        for (int g = 0; g < 3; g++) {
+            final int grp = g;
+            Button b = new Button(this);
+            b.setAllCaps(false);
+            b.setTextSize(11);
+            pathBtns[g] = b;
+            b.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    view.setPathGroup(grp);
+                    refreshToolLabels();
+                    info.setText("Jalur serang grup " + grp + ": " + entry.map.attackPath(grp).size() + " titik. Ketuk sel untuk menambah.");
+                }
+            });
+            palette.addView(b, new LinearLayout.LayoutParams(dp(112), LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+        Button clear = new Button(this);
+        clear.setAllCaps(false);
+        clear.setTextSize(11);
+        clear.setText("Kosongkan grup");
+        clear.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                AowMap m = entry.map;
+                int g = view.getPathGroup();
+                if (m.attackPath(g).isEmpty()) { info.setText("Grup " + g + " sudah kosong."); return; }
+                view.checkpoint();
+                String err = m.setAttackPath(g, new ArrayList<int[]>());
+                if (err != null) { view.discardCheckpoint(); info.setText(err); return; }
+                view.reload();
+                refreshToolLabels();
+                info.setText("Semua titik jalur grup " + g + " dihapus.");
+            }
+        });
+        palette.addView(clear, new LinearLayout.LayoutParams(dp(120), LinearLayout.LayoutParams.WRAP_CONTENT));
+        refreshToolLabels();
+    }
+
+    private void buildScriptPalette() {
+        btnScriptList = new Button(this);
+        btnScriptList.setAllCaps(false);
+        btnScriptList.setTextSize(11);
+        btnScriptList.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { showScriptList(); } });
+        palette.addView(btnScriptList, new LinearLayout.LayoutParams(dp(170), LinearLayout.LayoutParams.WRAP_CONTENT));
+        Button add = new Button(this);
+        add.setAllCaps(false);
+        add.setTextSize(11);
+        add.setText("Tambah event");
+        add.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { newEventDialog(entry.map.width / 2, entry.map.height / 2); } });
+        palette.addView(add, new LinearLayout.LayoutParams(dp(120), LinearLayout.LayoutParams.WRAP_CONTENT));
+        refreshToolLabels();
+    }
+
+    /** Keeps the counters on the path / script palette buttons current. */
+    private void refreshToolLabels() {
+        if (mode == MapView.PATH) {
+            for (int g = 0; g < 3; g++) {
+                Button b = pathBtns[g];
+                if (b == null) continue;
+                boolean sel = g == view.getPathGroup();
+                b.setText("Grup " + g + " (" + entry.map.attackPath(g).size() + "/" + AowMap.MAX_PATH_POINTS + ")");
+                b.setBackgroundColor(sel ? PATH_COLORS[g] : 0xFFCCCCCC);
+                b.setTextColor(sel ? Color.WHITE : Color.BLACK);
+            }
+        } else if (mode == MapView.SCRIPT && btnScriptList != null) {
+            btnScriptList.setText("Daftar skrip (" + entry.map.script().size() + "/" + AowMap.MAX_EVENTS + ")");
+        }
+    }
+
+    private void showScriptList() {
+        final AowMap m = entry.map;
+        if (!m.scriptEditable()) { Toast.makeText(this, "Skrip peta ini tidak dikenali", Toast.LENGTH_LONG).show(); return; }
+        List<int[]> ev = m.script();
+        CharSequence[] items = new CharSequence[ev.size()];
+        for (int i = 0; i < ev.size(); i++) {
+            int[] e = ev.get(i);
+            items[i] = "#" + (i + 1) + "  op " + e[0] + "  (" + e[1] + "," + e[2] + ")  a=" + e[3] + "  jeda=" + e[4] + "  grup=" + e[5];
+        }
+        AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle("Skrip peta (" + ev.size() + "/" + AowMap.MAX_EVENTS + ")");
+        if (ev.isEmpty()) {
+            b.setMessage("Belum ada event.");
+        } else {
+            b.setItems(items, new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int which) {
+                    List<int[]> now = m.script();
+                    if (which < now.size()) showEventDialog(which, now.get(which));
+                }
+            });
+        }
+        b.setPositiveButton("Tambah di akhir", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface d, int w) { newEventDialog(m.width / 2, m.height / 2); }
+        });
+        b.setNegativeButton("Tutup", null);
+        b.show();
+    }
+
+    private void newEventDialog(int x, int y) {
+        if (entry.map.script().size() >= AowMap.MAX_EVENTS) {
+            Toast.makeText(this, "Batas " + AowMap.MAX_EVENTS + " event skrip tercapai", Toast.LENGTH_LONG).show();
+            return;
+        }
+        showEventDialog(-1, new int[]{27, x, y, 32, 0, 0});
+    }
+
+    @Override
+    public void onScriptCell(int x, int y) {
+        final AowMap m = entry.map;
+        if (!m.scriptEditable()) { Toast.makeText(this, "Skrip peta ini tidak dikenali", Toast.LENGTH_LONG).show(); return; }
+        final List<int[]> ev = m.script();
+        final ArrayList<Integer> here = new ArrayList<Integer>();
+        for (int i = 0; i < ev.size(); i++) {
+            int[] e = ev.get(i);
+            if (MapView.eventHasPlace(e) && e[1] == x && e[2] == y) here.add(i);
+        }
+        if (here.isEmpty()) { newEventDialog(x, y); return; }
+        if (here.size() == 1) { view.selectEvent(here.get(0)); showEventDialog(here.get(0), ev.get(here.get(0))); return; }
+        CharSequence[] items = new CharSequence[here.size()];
+        for (int k = 0; k < here.size(); k++) {
+            int i = here.get(k);
+            items[k] = "#" + (i + 1) + "  op " + ev.get(i)[0] + "  a=" + ev.get(i)[3] + "  grup=" + ev.get(i)[5];
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Event di x=" + x + " y=" + y)
+                .setItems(items, new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        int i = here.get(which);
+                        view.selectEvent(i);
+                        showEventDialog(i, ev.get(i));
+                    }
+                })
+                .setNeutralButton("Event baru di sini", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        newEventDialog(ev.get(here.get(0))[1], ev.get(here.get(0))[2]);
+                    }
+                })
+                .setNegativeButton("Batal", null)
+                .show();
+    }
+
+    /** Add (index = -1) or edit one script event. The script runs strictly in order, so the position matters. */
+    private void showEventDialog(final int index, int[] e0) {
+        final AowMap m = entry.map;
+        final int n = m.script().size();
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(8), dp(20), 0);
+        TextView hint = new TextView(this);
+        hint.setText("Skrip berjalan berurutan: tiap event menunggu (Jeda x 10 tik) sesudah event sebelumnya. "
+                + "Op 20-39. Yang sudah diketahui: 24 = posisi kamera awal, 27 = spawn unit di (x,y) "
+                + "(A = kode, grup 0-2 = musuh, 3+ = pemain), 22/23 = label dan ulangan loop (A = jumlah, 255 = terus), "
+                + "20/21 = perintah AI per grup. Op lain: arti belum dipastikan, ubah dengan hati-hati.");
+        hint.setTextSize(12);
+        form.addView(hint);
+        final EditText fOp = numField(form, "Op (20-39)", e0[0]);
+        final EditText fX = numField(form, "X", e0[1]);
+        final EditText fY = numField(form, "Y", e0[2]);
+        final EditText fA = numField(form, "A (kode / parameter)", e0[3]);
+        final EditText fB = numField(form, "Jeda (x10 tik)", e0[4]);
+        final EditText fG = numField(form, "Grup", e0[5]);
+        final int maxPos = index < 0 ? n + 1 : n;
+        final EditText fPos = numField(form, "Urutan (1-" + maxPos + ")", index < 0 ? n + 1 : index + 1);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(form);
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle(index < 0 ? "Event skrip baru" : "Event #" + (index + 1) + ": " + MapScript.opName(e0[0]))
+                .setView(sv)
+                .setPositiveButton("Terapkan", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        int[] v = {num(fOp, 27), num(fX, 0), num(fY, 0), num(fA, 0), num(fB, 0), num(fG, 0)};
+                        int pos = num(fPos, maxPos);
+                        if (v[0] < 20 || v[0] > 39) { toast("Op harus 20-39"); return; }
+                        for (int k = 1; k < 6; k++) if (v[k] < 0 || v[k] > 255) { toast("X, Y, A, Jeda, Grup harus 0-255"); return; }
+                        if ((v[0] == 27 || v[0] == 24) && (v[1] >= m.width || v[2] >= m.height)) { toast("Posisi di luar peta"); return; }
+                        if (pos < 1 || pos > maxPos) { toast("Urutan harus 1-" + maxPos); return; }
+                        List<int[]> ev = m.script();
+                        if (index >= 0) ev.remove(index);
+                        ev.add(pos - 1, v);
+                        view.checkpoint();
+                        String err = m.setScript(ev);
+                        if (err != null) { view.discardCheckpoint(); toast(err); return; }
+                        view.reload();
+                        view.selectEvent(pos - 1);
+                        refreshToolLabels();
+                        info.setText(MapView.describeEvent(pos - 1, v));
+                    }
+                })
+                .setNegativeButton("Batal", null);
+        if (index >= 0) {
+            b.setNeutralButton("Hapus", new DialogInterface.OnClickListener() {
+                public void onClick(DialogInterface d, int w) {
+                    List<int[]> ev = m.script();
+                    if (index >= ev.size()) return;
+                    ev.remove(index);
+                    view.checkpoint();
+                    String err = m.setScript(ev);
+                    if (err != null) { view.discardCheckpoint(); toast(err); return; }
+                    view.reload();
+                    view.selectEvent(-1);
+                    refreshToolLabels();
+                    info.setText("Event #" + (index + 1) + " dihapus.");
+                }
+            });
+        }
+        b.show();
+    }
+
+    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
+
+    /** Writes the current map as a raw map file (same bytes the JAR would contain for it). */
+    private void exportMap() {
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("application/octet-stream");
+        i.putExtra(Intent.EXTRA_TITLE, entry.file);
+        startActivityForResult(i, REQ_EXPORT);
+    }
+
+    private byte[] mapBytes() {
+        JarProject p = Session.project;
+        byte[] d0 = p == null ? null : p.resource("d0"), ml = p == null ? null : p.resource("ml");
+        if (d0 != null && ml != null) {
+            try { entry.map.syncPassability(new Passability(d0, ml)); } catch (IOException ex) { /* keep the bits as they are */ }
+        }
+        return entry.map.toBytes();
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_EXPORT || res != RESULT_OK || data == null || data.getData() == null) return;
+        final Uri uri = data.getData();
+        final byte[] bytes;
+        try {
+            bytes = mapBytes();
+        } catch (RuntimeException ex) {
+            toast("Gagal menyiapkan map: " + ex);
+            return;
+        }
+        new Thread(new Runnable() {
+            public void run() {
+                String msg;
+                try {
+                    OutputStream out = getContentResolver().openOutputStream(uri);
+                    out.write(bytes);
+                    out.close();
+                    msg = "File map tersimpan (" + bytes.length + " byte).";
+                } catch (Exception ex) {
+                    msg = "Gagal menyimpan file map: " + ex;
+                }
+                final String m = msg;
+                runOnUiThread(new Runnable() { public void run() { toast(m); } });
+            }
+        }).start();
     }
 
     // ------------------------------------------------------------------ building dialog
@@ -428,5 +765,6 @@ public class EditorActivity extends Activity implements MapView.Listener {
     public void onInfo(String text) {
         info.setText(text);
         updateTitle();
+        refreshToolLabels();
     }
 }
