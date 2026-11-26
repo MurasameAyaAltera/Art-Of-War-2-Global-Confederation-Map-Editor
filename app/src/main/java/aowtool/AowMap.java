@@ -20,7 +20,9 @@ import java.util.List;
  *   objs x { u8 type; u8 x; u8 y }    decorations / obstacles
  *   fog  height x ceil(width/32) x 4 bytes  (visibility masks, kept as is)
  *   u8   number of buildings
- *   blds x { u8 kind; u8 x; u8 y; u8 group }   placed buildings (kind 0..7 = player, 8..14 = enemy)
+ *   blds x { u8 kind; u8 x; u8 y; u8 group }   placed buildings (kind 0..7 = player, 8..14 = enemy).
+ *        kind >= 15 is a 1x1 wall (the loader e.a(int) stores it in the wall grid as 1001 + 100*side + 20*level):
+ *        15..19 = player walls (level 0..4), 25..29 = enemy walls (20..24 / 30..34 are accepted as aliases)
  *   ...  rest: AI zones, attack waves, mission script, briefing text. Kept byte-for-byte; only the script is
  *        read (see MapScript) to show where units spawn.
  */
@@ -85,22 +87,45 @@ public class AowMap {
 
     // ------------------------------------------------------------------ buildings
 
-    /** Footprints {w,h} of building kinds 0..14 (from the game's d0 table gz[18]/gz[19]). */
+    /** Footprints {w,h} of building kinds 0..14 (from the game's d0 table gz[18]/gz[19]); walls are 1x1. */
     private static final int[][] FOOT = {{4, 4}, {3, 3}, {3, 3}, {4, 3}, {3, 3}, {2, 2}, {2, 2}, {2, 2},
             {3, 4}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {2, 2}, {2, 2}};
-    public static final int KINDS = FOOT.length;          // 15
-    public static final int MAX_PER_OWNER = 50;           // the game's slot limit per side
+    public static final int KINDS = FOOT.length;          // 15 real buildings (kind 0..14)
+    public static final int WALL_FIRST = 15, WALL_LAST = 34;
+    public static final int MAX_PER_OWNER = 50;           // the game's slot limit per side (real buildings only)
+
+    /** Kinds offered in the palette: buildings 0..14, player walls 15..19, enemy walls 25..29. */
+    public static final int[] PALETTE = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+            15, 16, 17, 18, 19, 25, 26, 27, 28, 29};
+
+    public static boolean isWall(int kind) { return kind >= WALL_FIRST && kind <= WALL_LAST; }
+
+    /** True for any kind the game's loader understands (building or wall). */
+    public static boolean validKind(int kind) { return (kind >= 0 && kind < KINDS) || isWall(kind); }
 
     public static int[] footprint(int kind) {
         return kind >= 0 && kind < FOOT.length ? new int[]{FOOT[kind][0], FOOT[kind][1]} : new int[]{1, 1};
     }
 
     /** 0 = player, 1 = enemy. */
-    public static int owner(int kind) { return kind / 8; }
+    public static int owner(int kind) {
+        if (kind < KINDS) return kind / 8;
+        return (kind - WALL_FIRST) / 10;
+    }
 
+    /** Short description of a kind, e.g. "Bangunan tipe 7" or "Tembok tipe 27". */
+    public static String kindName(int kind) { return (isWall(kind) ? "Tembok tipe " : "Bangunan tipe ") + kind; }
+
+    /** Number of real buildings (not walls) of a side; walls do not use the game's 50 slots. */
     public int countOwner(int owner) {
         int n = 0;
-        for (int[] b : buildings) if (owner(b[0]) == owner) n++;
+        for (int[] b : buildings) if (!isWall(b[0]) && owner(b[0]) == owner) n++;
+        return n;
+    }
+
+    public int countWalls() {
+        int n = 0;
+        for (int[] b : buildings) if (isWall(b[0])) n++;
         return n;
     }
 
@@ -123,7 +148,7 @@ public class AowMap {
      */
     public String checkBuilding(int kind, int x, int y, int ignore) {
         if (!structured) return "Format bangunan peta ini tidak dikenali";
-        if (kind < 0 || kind >= KINDS) return "Tipe bangunan tidak valid";
+        if (!validKind(kind)) return "Tipe bangunan tidak valid (0-14 bangunan, 15-29 tembok)";
         int[] f = footprint(kind);
         if (x < 0 || y < 0 || x + f[0] > width || y + f[1] > height) return "Bangunan keluar dari peta";
         for (int i = 0; i < buildings.size(); i++) {
@@ -133,10 +158,15 @@ public class AowMap {
             if (x < b[1] + g[0] && b[1] < x + f[0] && y < b[2] + g[1] && b[2] < y + f[1])
                 return "Menimpa bangunan lain";
         }
-        int own = owner(kind);
-        int n = 0;
-        for (int i = 0; i < buildings.size(); i++) if (i != ignore && owner(buildings.get(i)[0]) == own) n++;
-        if (n >= MAX_PER_OWNER) return "Batas " + MAX_PER_OWNER + " bangunan per pihak tercapai";
+        if (!isWall(kind)) {
+            int own = owner(kind);
+            int n = 0;
+            for (int i = 0; i < buildings.size(); i++) {
+                int[] o = buildings.get(i);
+                if (i != ignore && !isWall(o[0]) && owner(o[0]) == own) n++;
+            }
+            if (n >= MAX_PER_OWNER) return "Batas " + MAX_PER_OWNER + " bangunan per pihak tercapai";
+        }
         if (buildings.size() - (ignore >= 0 ? 1 : 0) >= 255) return "Terlalu banyak bangunan";
         return null;
     }

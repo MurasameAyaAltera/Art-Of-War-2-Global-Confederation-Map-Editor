@@ -160,7 +160,7 @@ public class Art {
         if (kind < 0) return null;
         Integer key = Integer.valueOf(ts * 1000 + type);
         if (objCache.containsKey(key)) return objCache.get(key);
-        Canvas c = new Canvas(256, 160, 48, 48);
+        Canvas c = new Canvas(384, 288, 96, 160);
         try { kind(c, kind, 0, 0); } catch (IOException e) { /* keep partial */ }
         Img r = c.crop(false);
         objCache.put(key, r);
@@ -173,7 +173,7 @@ public class Art {
         if (kind < 0 || kind >= KINDS || kind >= gA[14].length) return null;
         Integer key = Integer.valueOf(100000 + kind);
         if (objCache.containsKey(key)) return objCache.get(key);
-        Canvas c = new Canvas(256, 192, 64, 64);
+        Canvas c = new Canvas(448, 352, 128, 192);
         try { kind(c, kind, 0, 0); } catch (IOException e) { /* keep partial */ }
         Img r = c.crop(false);
         objCache.put(key, r);
@@ -293,16 +293,38 @@ public class Art {
         }
     }
 
-    /** The game's a(kind,x,y,..,0) for static objects (layer 0, no direction variants). */
+    /**
+     * The game's drawing routine for one "kind" (e.a(kind,x,y,mode,..)), as it looks for an intact, idle building.
+     * Entries carry gz[24] = layer and gz[25] = damage stage:
+     *   layer 0  base pass (mode 0), layer 1  top pass (mode 1, drawn above units/walls behind it),
+     *   layer 2  animated parts of buildings (turret head = stage 2, activity light = stage 10, muzzle flash = stage 1),
+     *   layer 5  padding entries without art.
+     * Stage 5..7 are damaged looks; stage 4 is the intact look. Objects (kind >= 133 or decoration) ignore layers.
+     */
     private void kind(Canvas c, int kind, int x, int y) throws IOException {
         int k0 = gA[14][kind], k1 = gA[15][kind];
-        for (int k = k0; k <= k1 && k < gA[16].length; k++) {
-            if (gz[24][k] != 0 && kind < 133) continue;
-            if (gz[25][k] > 0) continue;
-            int id = gA[16][k], dx = gA[17][k], dy = gz[20][k];   // dy is a signed byte
-            int t = gz[23][k];
-            if (t == 0) frame(c, id, x + dx, y + dy);
-            else if (t == 1) sprite(c, id, x + dx, y + dy, 0);
+        boolean layered = kind < 133;
+        int state = 4;                                   // intact
+        for (int pass = 0; pass < 3; pass++) {
+            if (!layered && pass > 0) break;
+            for (int k = k0; k <= k1 && k < gA[16].length; k++) {
+                int layer = gz[24][k], dir = gz[25][k] & 255, t = gz[23][k];
+                int id = gA[16][k], dx = gA[17][k], dy = gz[20][k];   // dy is a signed byte
+                if (layered) {
+                    if (layer != pass) continue;
+                    if (pass == 2) {
+                        // Only the turret head of buildings (stage 2, sprite) is part of how a building looks.
+                        if (kind >= 15 || dir != 2 || t != 1) continue;
+                    } else if (dir > 0) {
+                        if (pass == 0 && dir != state) continue;
+                        if (pass == 1 && dir > state) continue;
+                    }
+                } else if (dir > 0) {
+                    continue;
+                }
+                if (t == 0) frame(c, id, x + dx, y + dy);
+                else if (t == 1) sprite(c, id, x + dx, y + dy, 0);
+            }
         }
     }
 }

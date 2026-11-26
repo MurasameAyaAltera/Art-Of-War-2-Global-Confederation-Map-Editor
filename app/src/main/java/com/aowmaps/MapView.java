@@ -312,7 +312,7 @@ public class MapView extends View {
 
     public static String describeBuilding(int[] b) {
         int[] f = AowMap.footprint(b[0]);
-        return "Bangunan tipe " + b[0] + " (" + (AowMap.owner(b[0]) == 0 ? "pemain" : "musuh") + ", "
+        return AowMap.kindName(b[0]) + " (" + (AowMap.owner(b[0]) == 0 ? "pemain" : "musuh") + ", "
                 + f[0] + "x" + f[1] + ") di x=" + b[1] + " y=" + b[2] + ", grup " + b[3];
     }
 

@@ -293,8 +293,7 @@ public class EditorActivity extends Activity implements MapView.Listener {
         final boolean objMode = mode == MapView.OBJ_ADD || mode == MapView.OBJ_DEL;
         int[] ids;
         if (bldMode) {
-            ids = new int[AowMap.KINDS];
-            for (int i = 0; i < ids.length; i++) ids[i] = i;
+            ids = AowMap.PALETTE.clone();
         } else {
             ids = objMode ? (showAll ? allObjIds : objIds) : (showAll ? allTileIds : tileIds);
         }
@@ -310,7 +309,7 @@ public class EditorActivity extends Activity implements MapView.Listener {
                         bldKind = id; view.setBuildingKind(id);
                         int[] fp = AowMap.footprint(id);
                         if (mode != MapView.BLD_ADD) setMode(MapView.BLD_ADD);
-                        info.setText("Bangunan tipe " + id + " (" + (AowMap.owner(id) == 0 ? "pemain" : "musuh")
+                        info.setText(AowMap.kindName(id) + " (" + (AowMap.owner(id) == 0 ? "pemain" : "musuh")
                                 + ", " + fp[0] + "x" + fp[1] + " sel). Ketuk peta untuk menaruh.");
                     } else if (objMode) {
                         objType = id; view.setObjType(id);
@@ -359,15 +358,15 @@ public class EditorActivity extends Activity implements MapView.Listener {
         form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(dp(20), dp(8), dp(20), 0);
         TextView hint = new TextView(this);
-        hint.setText("Tipe 0-7 = pemain (biru), 8-14 = musuh (merah). Grup AI 0-2 menentukan zona/gelombang AI yang memakai bangunan ini.");
+        hint.setText("Tipe 0-7 = bangunan pemain (biru; 7 = peluncur rudal), 8-14 = bangunan musuh (merah). Tipe 15-19 = tembok pemain, 25-29 = tembok musuh (1x1). Grup AI 0-2 menentukan zona/gelombang AI yang memakai bangunan ini.");
         hint.setTextSize(12);
         form.addView(hint);
-        final EditText fKind = numField(form, "Tipe (0-14)", b[0]);
+        final EditText fKind = numField(form, "Tipe (0-14, 15-29 tembok)", b[0]);
         final EditText fX = numField(form, "X", b[1]);
         final EditText fY = numField(form, "Y", b[2]);
         final EditText fG = numField(form, "Grup AI (0-2)", b[3]);
         new AlertDialog.Builder(this)
-                .setTitle("Bangunan #" + index + "  " + AowMap.footprint(b[0])[0] + "x" + AowMap.footprint(b[0])[1])
+                .setTitle((AowMap.isWall(b[0]) ? "Tembok #" : "Bangunan #") + index + "  " + AowMap.footprint(b[0])[0] + "x" + AowMap.footprint(b[0])[1])
                 .setView(form)
                 .setPositiveButton("Terapkan", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) {

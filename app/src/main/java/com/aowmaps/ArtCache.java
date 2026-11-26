@@ -83,7 +83,7 @@ final class ArtCache {
         return s == NONE ? null : s;
     }
 
-    /** Building art for kind 0..14 (0..7 player, 8..14 enemy), or null when unavailable. */
+    /** Building art for kind 0..14 (0..7 player, 8..14 enemy) and walls 15..29, or null when unavailable. */
     synchronized Spr building(int kind) {
         Integer k = Integer.valueOf(kind);
         Spr s = blds.get(k);
@@ -104,7 +104,7 @@ final class ArtCache {
         int nt = tileCount(ts), no = objectCount(ts);
         for (int i = 0; i < nt; i++) tile(ts, i);
         for (int i = 0; i < no; i++) obj(ts, i);
-        for (int i = 0; i < aowtool.AowMap.KINDS; i++) building(i);
+        for (int k : aowtool.AowMap.PALETTE) building(k);
         synchronized (this) { ready.add(Integer.valueOf(ts)); }
     }
 
