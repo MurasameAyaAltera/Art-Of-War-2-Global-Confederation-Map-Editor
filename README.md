@@ -2,12 +2,6 @@
 
 Edit peta Art of War 2 - Global Confederation (.jar), tambah map baru, dan patch JAR agar map baru terbaca.
 
-## Build lewat GitHub (tanpa Android Studio)
-1. Buat repo baru di GitHub, upload SELURUH isi folder ini (termasuk folder `.github`).
-2. Buka tab **Actions** > workflow **Build APK** (jalan otomatis saat push, atau klik *Run workflow*).
-3. Setelah hijau, buka run-nya > bagian **Artifacts** > unduh `AoW2-MapEditor-apk` (zip berisi `app-debug.apk`).
-4. Ekstrak, pasang APK di HP (izinkan install dari sumber tidak dikenal).
-
 ## Pemakaian
 1. **Buka JAR** -> pilih file game.
 2. Ketuk map untuk mengedit (Geser / Kuas / Objek+ / Objek- / Pipet, cubit untuk zoom).
